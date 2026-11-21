@@ -4,3 +4,7 @@
   ➜  Local:   http://localhost:5173/
   ➜  Network: use --host to expose
 11:31:22 PM [vite] page reload src/model/units.ts
+11:36:58 PM [vite] page reload src/data/repo.ts
+11:36:58 PM [vite] page reload src/ui/home.ts
+11:36:58 PM [vite] page reload src/main.ts
+11:37:08 PM [vite] page reload src/ui/home.ts

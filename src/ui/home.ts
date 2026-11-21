@@ -60,7 +60,7 @@ export async function showHome(root: HTMLElement, repo: Repo, opts: { open: (id:
     return h('div', { class: 'card' },
       h('button', { type: 'button', class: 'open', onclick: () => opts.open(p.id) },
         p.thumb ? h('img', { src: p.thumb, alt: '' }) : h('div', { class: 'noimg' }),
-        h('div', { class: 'meta' }, h('b', null, p.name), h('span', null, `${p.rooms} room${p.rooms === 1 ? '' : 's'} · ${p.pieces} piece${p.pieces === 1 ? '' : 's'} · ${relTime(p.updated_at)}`))),
+        h('div', { class: 'meta' }, h('b', null, p.name), h('span', null, `${p.mine ? '' : 'Shared with you · '}${p.rooms} room${p.rooms === 1 ? '' : 's'} · ${p.pieces} piece${p.pieces === 1 ? '' : 's'} · ${relTime(p.updated_at)}`))),
       h('button', { type: 'button', 'aria-label': 'Options for ' + p.name, onclick: () => menu(p) }, '⋯'));
   }
 
@@ -68,7 +68,9 @@ export async function showHome(root: HTMLElement, repo: Repo, opts: { open: (id:
     const close = sheet(p.name, [h('div', { class: 'list' },
       h('button', { type: 'button', onclick: () => { close(); rename(p); } }, 'Rename'),
       h('button', { type: 'button', onclick: () => { close(); duplicate(p); } }, 'Duplicate'),
-      h('button', { type: 'button', class: 'warn', onclick: () => { close(); remove(p); } }, 'Delete'))]);
+      ...(repo.sharing && p.mine ? [h('button', { type: 'button', onclick: () => { close(); share(p); } }, 'Share…')] : []),
+      p.mine ? h('button', { type: 'button', class: 'warn', onclick: () => { close(); remove(p); } }, 'Delete')
+        : h('button', { type: 'button', class: 'warn', onclick: () => { close(); leave(p); } }, 'Leave this shared place'))]);
   }
 
   async function newPlace() {
@@ -94,8 +96,34 @@ export async function showHome(root: HTMLElement, repo: Repo, opts: { open: (id:
       await repo.createPlace(doc, row.thumb); load(); toast('Duplicated');
     } catch (e) { toast(errText(e)); }
   }
+  async function share(p: PlaceSummary) {
+    const sh = repo.sharing!;
+    try {
+      const [code, n] = await Promise.all([sh.share(p.id), sh.memberCount(p.id)]);
+      const link = `${location.origin}/#/join/${code}`;
+      const input = h('input', { value: link, readonly: true, onfocus: (e: Event) => (e.target as HTMLInputElement).select() });
+      const close = sheet('Share ' + p.name, [
+        h('p', { class: 'muted' }, 'Anyone who opens this link and signs in with GitHub can see and edit this place. Send it only to people you trust.'),
+        input,
+        h('div', { class: 'row' },
+          h('button', { type: 'button', class: 'primary', onclick: async () => {
+            if ('share' in navigator) { try { await navigator.share({ title: p.name, url: link }); return; } catch { /* cancelled */ } }
+            try { await navigator.clipboard.writeText(link); toast('Link copied'); } catch { input.select(); toast('Select the link and copy it'); }
+          } }, 'share' in navigator ? 'Send link' : 'Copy link'),
+          h('button', { type: 'button', onclick: () => close() }, 'Done')),
+        h('p', { class: 'muted' }, n ? `Shared with ${n} ${n === 1 ? 'person' : 'people'}.` : 'Nobody has joined yet.'),
+        h('button', { type: 'button', class: 'warn', onclick: async () => {
+          if (!(await confirmDialog('Stop sharing? The link stops working and everyone else loses access.', 'Stop sharing'))) return;
+          try { await sh.unshare(p.id); close(); toast('Sharing stopped'); } catch (e) { toast(errText(e)); }
+        } }, 'Stop sharing')]);
+    } catch (e) { toast(errText(e)); }
+  }
+  async function leave(p: PlaceSummary) {
+    if (!(await confirmDialog(`Leave ${p.name}? It stays with its owner; you'll need a new link to come back.`, 'Leave'))) return;
+    try { await repo.sharing!.leave(p.id); dropCached(p.id); load(); } catch (e) { toast(errText(e)); }
+  }
   async function remove(p: PlaceSummary) {
-    if (!(await confirmDialog(`Delete ${p.name}? This can't be undone.`, 'Delete'))) return;
+    if (!(await confirmDialog(`Delete ${p.name}? This can't be undone, and anyone it's shared with loses it too.`, 'Delete'))) return;
     try { await repo.deletePlace(p.id); dropCached(p.id); load(); } catch (e) { toast(errText(e)); }
   }
   await load();

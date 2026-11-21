@@ -3,7 +3,7 @@ import type { Place } from '../model/types';
 import { newId } from '../model/types';
 
 export interface PlaceRow { id: string; name: string; doc: Place; thumb: string | null; version: number; updated_at: string }
-export type PlaceSummary = Omit<PlaceRow, 'doc'> & { rooms: number; pieces: number };
+export type PlaceSummary = Omit<PlaceRow, 'doc'> & { rooms: number; pieces: number; mine: boolean };
 export type SaveResult =
   | { ok: true; row: PlaceRow }
   | { ok: false; conflict: PlaceRow }
@@ -18,6 +18,13 @@ export interface Repo {
   createPlace(doc: Place, thumb: string | null): Promise<PlaceRow>;
   savePlace(id: string, doc: Place, thumb: string | null, expectedVersion: number): Promise<SaveResult>;
   deletePlace(id: string): Promise<void>;
+  sharing?: {
+    share(id: string): Promise<string>;
+    unshare(id: string): Promise<void>;
+    join(code: string): Promise<string | null>;
+    leave(id: string): Promise<void>;
+    memberCount(id: string): Promise<number>;
+  };
 }
 
 // Sorts a failed request into offline / database asleep / signed out / other
@@ -32,7 +39,7 @@ export function classify(err: unknown, status?: number): SaveResult {
   return { ok: false, error: msg || 'Save failed' };
 }
 
-const SUMMARY = 'id,name,thumb,version,updated_at,doc->rooms,doc->items';
+const SUMMARY = 'id,owner,name,thumb,version,updated_at,doc->rooms,doc->items';
 
 // Reads and writes places in the Supabase "places" table
 export function makeRepo(client: SupabaseClient): Repo {
@@ -41,8 +48,9 @@ export function makeRepo(client: SupabaseClient): Repo {
     async listPlaces() {
       const { data, error } = await t().select(SUMMARY).order('updated_at', { ascending: false });
       if (error) throw error;
-      return (data as unknown as (Omit<PlaceRow, 'doc'> & { rooms: unknown[]; items: { removed: boolean }[] })[]).map(r => ({
-        id: r.id, name: r.name, thumb: r.thumb, version: r.version, updated_at: r.updated_at,
+      const me = (await client.auth.getSession()).data.session?.user.id;
+      return (data as unknown as (Omit<PlaceRow, 'doc'> & { owner: string; rooms: unknown[]; items: { removed: boolean }[] })[]).map(r => ({
+        id: r.id, name: r.name, thumb: r.thumb, version: r.version, updated_at: r.updated_at, mine: r.owner === me,
         rooms: r.rooms?.length ?? 0, pieces: (r.items ?? []).filter(i => !i.removed).length,
       }));
     },
@@ -80,6 +88,16 @@ export function makeRepo(client: SupabaseClient): Repo {
       const { error } = await t().delete().eq('id', id);
       if (error) throw error;
     },
+    sharing: {
+      async share(id) { const { data, error } = await client.rpc('share_place', { pid: id }); if (error) throw error; if (!data) throw new Error('Only the owner can share this place'); return data as string; },
+      async unshare(id) { const { error } = await client.rpc('unshare_place', { pid: id }); if (error) throw error; },
+      async join(code) { const { data, error } = await client.rpc('join_place', { code }); if (error) throw error; return (data as string) ?? null; },
+      async leave(id) {
+        const me = (await client.auth.getSession()).data.session?.user.id;
+        const { error } = await client.from('place_members').delete().eq('place_id', id).eq('user_id', me ?? ''); if (error) throw error;
+      },
+      async memberCount(id) { const { data, error } = await client.rpc('member_count', { pid: id }); if (error) throw error; return (data as number) ?? 0; },
+    },
   };
 }
 
@@ -110,7 +128,7 @@ export function makeLocalRepo(storage: Storage = localStorage): Repo {
   const save = (db: Record<string, PlaceRow>) => storage.setItem(KEY, JSON.stringify(db));
   return {
     async listPlaces() {
-      return Object.values(load()).sort((a, b) => b.updated_at.localeCompare(a.updated_at)).map(({ doc, ...r }) => ({ ...r, rooms: doc.rooms.length, pieces: doc.items.filter(i => !i.removed).length }));
+      return Object.values(load()).sort((a, b) => b.updated_at.localeCompare(a.updated_at)).map(({ doc, ...r }) => ({ ...r, mine: true, rooms: doc.rooms.length, pieces: doc.items.filter(i => !i.removed).length }));
     },
     async getPlace(id) { return load()[id] ?? null; },
     async createPlace(doc, thumb) {

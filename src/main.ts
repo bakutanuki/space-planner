@@ -29,6 +29,19 @@ async function closeEditor() {
 }
 
 async function route() {
+  // invite links: remember the code through sign-in, then join and open the place
+  const j = location.hash.match(/^#\/join\/([\w-]+)/);
+  if (j) { try { localStorage.setItem('sp:join', j[1]); } catch { /* ignore */ } history.replaceState(null, '', location.pathname); }
+  let pendingJoin: string | null = null;
+  try { pendingJoin = localStorage.getItem('sp:join'); } catch { /* ignore */ }
+  if (pendingJoin && (localOnly || user) && repo.sharing) {
+    try { localStorage.removeItem('sp:join'); } catch { /* ignore */ }
+    try {
+      const id = await repo.sharing.join(pendingJoin);
+      if (id) { location.hash = '#/place/' + id; return; }
+      toast('That share link no longer works. Ask for a new one.');
+    } catch (e) { toast('Could not join: ' + String((e as Error).message ?? e)); }
+  }
   const m = location.hash.match(/^#\/place\/([\w-]+)/);
   if (editorId && (!m || m[1] !== editorId)) await closeEditor();
   if (!localOnly && !user) return showSignIn(root, () => signInWithGitHub().catch(e => toast(String(e.message ?? e))));
@@ -38,7 +51,7 @@ async function route() {
     open: id => { location.hash = '#/place/' + id; },
     signOut: localOnly ? undefined : async () => { await signOut(); user = null; route(); },
     localOnly,
-    onFirstRun: async () => { const doc = seedApartment(); await repo.createPlace(doc, makeThumbnail(doc)); },
+    onFirstRun: async () => { if (localStorage.getItem('sp:join')) return; const doc = seedApartment(); await repo.createPlace(doc, makeThumbnail(doc)); },
   });
 }
 
@@ -87,8 +100,8 @@ async function openEditor(id: string) {
 function askConflict(q: SaveQueue, ed: EditorApi) {
   let chosen = false;
   const choose = async (c: 'mine' | 'theirs') => { chosen = true; close(); const doc = await q.resolve(c); if (c === 'theirs') ed.replacePlace(doc); };
-  const close = sheet('This place was changed on another device', [
-    h('p', { class: 'muted' }, 'Pick which version to keep. The other one will be replaced.'),
+  const close = sheet('This place was changed somewhere else', [
+    h('p', { class: 'muted' }, 'It was changed on another device, or by someone you share it with. Pick which version to keep; the other one will be replaced.'),
     h('div', { class: 'row' },
       h('button', { type: 'button', class: 'primary', onclick: () => choose('mine') }, 'Keep mine (this device)'),
       h('button', { type: 'button', onclick: () => choose('theirs') }, 'Use the other version')),
