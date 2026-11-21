@@ -1,7 +1,7 @@
 import './styles.css';
 import type { User } from '@supabase/supabase-js';
 import { supabase } from './data/supabase';
-import { getUser, onAuthChange, signInWithGitHub, signOut } from './data/auth';
+import { getUser, onAuthChange, signInWithEmail, signInWithGitHub, signOut } from './data/auth';
 import { makeLocalRepo, makeRepo, type PlaceRow } from './data/repo';
 import { listCachedDirty, readCached, writeCached } from './data/cache';
 import { createSaveQueue, type SaveQueue, type SaveStatus } from './data/saveQueue';
@@ -44,7 +44,7 @@ async function route() {
   }
   const m = location.hash.match(/^#\/place\/([\w-]+)/);
   if (editorId && (!m || m[1] !== editorId)) await closeEditor();
-  if (!localOnly && !user) return showSignIn(root, () => signInWithGitHub().catch(e => toast(String(e.message ?? e))));
+  if (!localOnly && !user) return showSignIn(root, () => signInWithGitHub().catch(e => toast(String(e.message ?? e))), signInWithEmail);
   if (m) { if (editorId !== m[1]) await openEditor(m[1]); return; }
   void syncDirty();
   await showHome(root, repo, {

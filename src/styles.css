@@ -98,3 +98,4 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .picture img { max-width: 100%; max-height: 70%; border-radius: 8px; background: #fff; }
 .picture p { color: #fff; margin: 0; text-align: center; max-width: 34ch; }
 @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+.center p.warnbox { color: var(--danger); }

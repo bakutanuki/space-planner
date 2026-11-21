@@ -31,3 +31,7 @@ Porkbun → **Domain Management** → `mishpabox.com` → **DNS** → add a reco
 
 ## 7. If the app says it can't reach the database
 Free Supabase projects pause after about a week without use. Go to supabase.com → your project → **Restore**. Nothing is lost, and changes made meanwhile are kept on your device and saved once it's back.
+
+## 8. Sharing and email sign-in
+- Sharing: run [`supabase/002_sharing.sql`](../supabase/002_sharing.sql) once in the SQL Editor. Then use ⋯ → Share… on a place to send an invite link.
+- Email sign-in links work when Supabase → **Authentication → Sign In / Providers → Email** is on (it is by default). The link must be opened in the same browser that asked for it.

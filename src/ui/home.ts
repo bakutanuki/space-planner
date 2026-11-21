@@ -8,12 +8,25 @@ import { makeThumbnail } from './editor/thumbnail';
 export const PAUSED_HELP = "Can't reach your database. Free Supabase projects pause after about a week without use. Open supabase.com, pick your project and press Restore, then try again. Your changes are kept on this device meanwhile.";
 
 // Sign-in screen
-export function showSignIn(root: HTMLElement, onSignIn: () => void, error?: string) {
+export function showSignIn(root: HTMLElement, onSignIn: () => void, onEmail: (email: string) => Promise<void>) {
+  const email = h('input', { type: 'email', autocomplete: 'email', inputmode: 'email', placeholder: 'you@example.com', 'aria-label': 'Email' });
+  const msg = h('p', { role: 'status' });
+  const send = h('button', { type: 'button', onclick: async () => {
+    const v = email.value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { msg.className = 'warnbox'; msg.textContent = 'Enter your email address'; return; }
+    send.disabled = true; msg.className = 'muted'; msg.textContent = 'Sending…';
+    try { await onEmail(v); msg.className = ''; msg.textContent = `Check ${v} for a sign-in link. Open it on this same phone or computer, in this browser.`; }
+    catch (e) { msg.className = 'warnbox'; msg.textContent = /rate|seconds/i.test(String((e as Error).message)) ? 'Too many emails just now. Wait a minute and try again.' : 'Could not send: ' + String((e as Error).message ?? e); }
+    finally { send.disabled = false; }
+  } }, 'Email me a sign-in link');
+  email.addEventListener('keydown', e => { if (e.key === 'Enter') send.click(); });
   root.replaceChildren(h('div', { class: 'center' },
     h('h1', null, 'Space Planner'),
     h('p', null, 'Try furniture layouts on screen at true size, so the real furniture only moves once.'),
-    error ? h('p', { class: 'warnbox' }, error) : null,
-    h('button', { type: 'button', class: 'primary', onclick: onSignIn }, 'Sign in with GitHub')));
+    h('button', { type: 'button', class: 'primary', onclick: onSignIn }, 'Sign in with GitHub'),
+    h('p', { class: 'muted' }, 'No GitHub? Use your email instead:'),
+    h('div', { style: { display: 'grid', gap: '8px', width: '100%', maxWidth: '320px' } }, email, send),
+    msg));
 }
 
 // The "My places" list with new / rename / duplicate / delete

@@ -8,6 +8,13 @@ export async function signInWithGitHub(): Promise<void> {
   if (error) throw error;
 }
 
+// Emails a one-tap sign-in link (no password)
+export async function signInWithEmail(email: string): Promise<void> {
+  if (!supabase) throw new Error('Database not set up');
+  const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + '/' } });
+  if (error) throw error;
+}
+
 // Who is signed in on this device (null if nobody)
 export async function getUser(): Promise<User | null> {
   if (!supabase) return null;
