@@ -25,3 +25,10 @@ describe('units', () => {
     expect(LEVELS.map(l => l.cm)).toEqual([0, 45, 75, 90, 150]);
   });
 });
+describe('squares precision', () => {
+  it('shows quarter squares instead of hiding them', async () => {
+    const { formatSquares } = await import('../../src/model/units');
+    expect(formatSquares(307.5, 30)).toBe('≈10.25 sq');
+    expect(formatSquares(622.5, 30)).toBe('≈20.75 sq');
+  });
+});

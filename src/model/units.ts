@@ -28,7 +28,7 @@ export function formatSquares(cm: number, squareCm: number): string {
     const half = halves % 2 === 1;
     return (half ? (whole === 0 ? '½' : whole + '½') : String(whole)) + ' sq';
   }
-  return '≈' + trim(s.toFixed(1)) + ' sq';
+  return '≈' + trim(s.toFixed(2)) + ' sq';
 }
 
 // "13½ sq · 4.05 m"
