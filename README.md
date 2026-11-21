@@ -23,3 +23,4 @@ See [docs/SETUP.md](docs/SETUP.md). Every push to `main` is tested, built and pu
 - `src/data/` Supabase sign-in, database, device cache, save queue.
 - `src/ui/` screens; `src/ui/editor/` the 3D scene, furniture models, editor and forms.
 - `docs/plan.md` the build plan.
+- `docs/HOW-IT-WORKS.md` plain-language guide to how it works and what to do when something breaks.
