@@ -22,10 +22,14 @@ export function childrenOf(place: Place, id: string): Item[] {
   return out;
 }
 
-// Can child be put on top of parent?
+// Pieces with a flat top that things can be put on
+const SURFACES = ['table', 'roundTable', 'nightstand', 'box', 'shelf', 'bed'];
+
+// Can child be put on top of parent? (only smaller pieces, only onto flat tops)
 export function canSitOn(place: Place, child: Item, parent: Item): boolean {
   if (parent.removed || parent.id === child.id) return false;
-  if (['rug', 'poster', 'lamp', 'tv'].includes(parent.type)) return false;
+  if (!SURFACES.includes(parent.type)) return false;
+  if (child.w * child.d > parent.w * parent.d) return false;
   if (childrenOf(place, child.id).some(c => c.id === parent.id)) return false;
   return pointInPoly({ x: child.x, z: child.z }, footprint({ x: parent.x, z: parent.z }, parent.w, parent.d, parent.rot));
 }

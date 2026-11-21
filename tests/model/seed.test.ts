@@ -67,6 +67,10 @@ describe('stacking and overlap', () => {
     const p4 = moveItem(p, lamp.id, { x: side.x, z: side.z }, { drop: true }).place;
     expect(p4.items.find(i => i.id === lamp.id)!.sitsOn).toBe(side.id);
     expect(findOverlaps(p4).size).toBe(0);
+    // a coffee table dropped on a sofa doesn't climb onto it
+    const table = byName(p, 'Coffee table');
+    const p6 = moveItem(p, table.id, { x: sofaA.x, z: sofaA.z }, { drop: true }).place;
+    expect(p6.items.find(i => i.id === table.id)!.sitsOn).toBeNull();
     // turning the stand turns the TV with it
     const p5 = rotateItem(p, stand.id, 90).place;
     expect(p5.items.find(i => i.id === tv.id)!.rot).toBe(0);

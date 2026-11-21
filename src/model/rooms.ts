@@ -22,8 +22,10 @@ export function wallOf(room: Room, i: number): { a: Pt; b: Pt; length: number; d
 // The floor box of a room
 export const roomBox = (room: Room): Box => aabb(room.outline);
 
-// Human names for the four walls of a rectangle
-export const WALL_NAMES = ['Top wall', 'Right wall', 'Bottom wall', 'Left wall'];
+// Names for the four walls as seen on screen (the plan is viewed from the window side, like the original planner)
+export const WALL_NAMES = ['Bottom wall', 'Left wall', 'Top wall', 'Right wall'];
+// Which end of each wall offsets are measured from, as seen on screen
+export const WALL_START = ['right end', 'bottom end', 'left end', 'top end'];
 
 // Rectangle outline in the standard corner order
 function rectOutline(b: Box): Pt[] {
