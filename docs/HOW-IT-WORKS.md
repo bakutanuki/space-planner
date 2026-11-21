@@ -142,7 +142,7 @@ Start with the row that matches what you see. Most problems are in the first thr
 | The 3D view is blank or black, but the buttons work | The browser or device has 3D graphics (WebGL) switched off, or it ran out of memory | Reload the page. Try another browser. On a computer, check hardware acceleration is on in the browser settings |
 | A piece won't go where you drag it | That's a rule: pieces stay in their room, stay out of built-ins, and only move between rooms through a door | Drag it through a doorway into the other room |
 | A piece is outlined in red | It overlaps another piece at the same height | Move it, or select it and press **Allow overlap** if it's meant to be that way |
-| Sizes look slightly off | Labels in squares are rounded for display, and **≈** means "not a whole or half square" | Switch the label to cm or m to see the exact number. Stored sizes are never rounded |
+| Sizes look slightly off | Labels in squares are rounded for display, and **≈** means "not a whole or half square" | Look at the metres shown next to the squares, or open the piece to see its exact cm. Stored sizes are never rounded |
 
 ### If you need to undo a code change
 Every change to the code is kept in GitHub's history. To roll the website back: repo → **Commits**, find the last commit that worked, and ask Claude to "revert the site to commit `<the commit's short code>`". When that's pushed, the site re-publishes automatically. Your saved places are in Supabase, not in the code, so rolling back the code never touches them.
