@@ -25,7 +25,9 @@ export function classify(err: unknown, status?: number): SaveResult {
   const msg = String((err as { message?: string })?.message ?? err ?? '');
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return { ok: false, offline: true };
   if (err instanceof TypeError || /failed to fetch|network|load failed/i.test(msg)) return { ok: false, offline: true };
-  if (status === 401 || status === 403 || /jwt|auth|permission|row-level/i.test(msg)) return { ok: false, auth: true };
+  const code = String((err as { code?: string })?.code ?? '');
+  if (code === '42501' || /permission denied/i.test(msg)) return { ok: false, error: 'Database permission problem (' + msg + '). Run the last line of supabase/schema.sql (the grant) in the Supabase SQL Editor.' };
+  if (status === 401 || /jwt|not authenticated|invalid claim|session/i.test(msg)) return { ok: false, auth: true };
   if ((status ?? 0) >= 500 || status === 0 || /paused|unavailable|timeout/i.test(msg)) return { ok: false, unreachable: true };
   return { ok: false, error: msg || 'Save failed' };
 }

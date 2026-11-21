@@ -38,7 +38,7 @@ export async function showHome(root: HTMLElement, repo: Repo, opts: { open: (id:
       const c = classify(e);
       let cached: PlaceSummary[] = [];
       try { cached = JSON.parse(localStorage.getItem('sp:list') || '[]'); } catch { /* none */ }
-      render(cached, 'offline' in c ? "You're offline. Showing the places this device knows; changes save when you're back online." : 'auth' in c ? 'Your sign-in expired. Reload the page to sign in again.' : PAUSED_HELP);
+      render(cached, 'offline' in c ? "You're offline. Showing the places this device knows; changes save when you're back online." : 'auth' in c ? 'Your sign-in expired. Reload the page to sign in again.' : 'error' in c ? c.error : PAUSED_HELP);
       return;
     }
     if (!places.length && !localStorage.getItem('sp:seeded')) {

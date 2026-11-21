@@ -11,3 +11,5 @@ create table public.places (
 alter table public.places enable row level security;
 create policy "own rows" on public.places for all
   using (owner = auth.uid()) with check (owner = auth.uid());
+-- Newer Supabase projects don't grant table access automatically
+grant select, insert, update, delete on public.places to authenticated;
