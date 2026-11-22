@@ -7,11 +7,17 @@ import { distancesToWalls, halfExtents, snapPoint } from '../../model/placement'
 import { effectiveElevation } from '../../model/stacking';
 import { LEVELS, levelForHeight } from '../../model/levels';
 import { formatCm } from '../../model/units';
-import { allowOverlap, cloneRoom, moveItem, moveRoom, moveRoomWall, removeItem, restoreItem, rotateItem, setItemLevel, snapRoomMove, snapWallMove } from '../../model/edit';
+import { allowOverlap, cloneItem, cloneRoom, groupItems, groupOf, moveGroup, rotateGroup, setItemColor, ungroup, moveItem, moveRoom, moveRoomWall, removeItem, restoreItem, rotateItem, setItemLevel, snapRoomMove, snapWallMove } from '../../model/edit';
 import type { Box } from '../../model/geometry';
 import { h, sheet, toast } from '../dom';
 import { SceneView } from './scene';
 import { openBuiltInForm, openFurnitureForm, openItemEditor, openOpeningForm, openRoomEditor, openRoomForm, openRoomPartForm, openRoomsSheet, openSettings, sizeText } from './forms';
+
+const SWATCHES: [string, string][] = [
+  ['#f2efe9', 'White'], ['#e8dcc4', 'Cream'], ['#d8caae', 'Sand'], ['#b08d64', 'Oak'], ['#5b3a26', 'Walnut'], ['#2a2724', 'Black'],
+  ['#8a8d91', 'Grey'], ['#9caf88', 'Sage'], ['#6b7a4f', 'Olive'], ['#2f4a6d', 'Navy'], ['#8fb3d9', 'Sky blue'], ['#c0663f', 'Terracotta'],
+  ['#d9a53b', 'Mustard'], ['#e3b5a4', 'Blush'], ['#7a4a6b', 'Plum'], ['#a8584a', 'Brick red'],
+];
 
 export interface EditorApi { destroy(): void; setStatus(text: string, cls: string, onClick?: () => void): void; replacePlace(p: Place): void; current(): Place }
 
@@ -43,6 +49,7 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
   };
   const curRoom = () => place.rooms.find(r => r.id === selRoom) ?? null;
   const sel = () => place.items.find(i => i.id === selected && !i.removed) ?? null;
+  const mates = () => (sel() ? groupOf(place, sel()!.id) : []); // the selected piece and its group
   const scopeRoomId = () => (scope !== 'all' && place.rooms.some(r => r.id === scope) ? scope : sel()?.roomId ?? place.rooms[0]?.id ?? '');
 
   function scopeBox(): Box {
@@ -64,7 +71,7 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
 
   function refresh() {
     const overlaps = findOverlaps(place);
-    scene.setPlace(place, { tint, overlaps: new Set(overlaps.keys()), selected });
+    scene.setPlace(place, { tint, overlaps: new Set(overlaps.keys()), selected, group: new Set(mates().map(i => i.id)) });
     legend.style.display = tint ? '' : 'none';
     renderScopes(); renderPanel(overlaps);
   }
@@ -78,14 +85,17 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
       const bumps = (overlaps.get(it.id) ?? []).map(id => place.items.find(i => i.id === id)?.name).filter(Boolean);
       info.append(h('b', null, it.name), ' ', h('span', { class: 'num' }, `${formatCm(it.w)} × ${formatCm(it.d)} × ${formatCm(it.h)}`), h('br'),
         parent ? `Sits on ${parent.name} (bottom at ${formatCm(elev)}).` : elev > 0 ? `Bottom at ${formatCm(elev)} off the floor.` : 'On the floor.',
-        ' Drag to move.',
+        ...(mates().length > 1 ? [h('br'), `In a group with ${mates().filter(m => m.id !== it.id).map(m => m.name).join(', ')}. Drag or turn to move them together.`] : [' Drag to move.']),
         ...(bumps.length ? [h('div', { class: 'warnbox' }, 'Overlaps ' + bumps.join(', '))] : []));
       levels.append(...LEVELS.map(l => h('button', { type: 'button', title: `${l.name}, ${formatCm(l.cm)}`, 'aria-pressed': String(!parent && l.n === lvl.n && Math.abs(it.elevation - l.cm) < 0.01),
         style: { borderColor: l.color }, onclick: () => commit(setItemLevel(place, it.id, l.n).place) }, `${l.n} ${l.name}`)));
       actions.append(
-        h('button', { type: 'button', onclick: () => apply(rotateItem(place, it.id, 90)) }, 'Turn 90°'),
-        h('button', { type: 'button', onclick: () => apply(rotateItem(place, it.id, 15)) }, 'Turn 15°'),
+        h('button', { type: 'button', onclick: () => turn(it.id, 90) }, 'Turn 90°'),
+        h('button', { type: 'button', onclick: () => turn(it.id, 15) }, 'Turn 15°'),
         h('button', { type: 'button', onclick: () => openItemEditor(place, it.id, p => { commit(p); if (!p.items.some(i => i.id === it.id)) select(null); }) }, 'Edit'),
+        h('button', { type: 'button', onclick: () => colorSheet(it.id) }, 'Color'),
+        h('button', { type: 'button', onclick: () => { const c = cloneItem(place, it.id); if (c.error || !c.id) toast(c.error ?? 'Could not copy', stage); else { commit(c.place); select(c.id); } } }, 'Clone'),
+        mates().length > 1 ? h('button', { type: 'button', onclick: () => commit(ungroup(place, it.id).place) }, 'Ungroup') : h('button', { type: 'button', onclick: () => groupSheet(it.id) }, 'Group…'),
         ...(bumps.length ? [h('button', { type: 'button', onclick: () => commit(allowOverlap(place, it.id).place) }, 'Allow overlap')] : []),
         h('button', { type: 'button', class: 'warn', onclick: () => { const id = it.id; select(null); commit(removeItem(place, id).place); } }, 'Remove'),
         h('button', { type: 'button', class: 'primary', onclick: () => select(null) }, 'Done'));
@@ -118,6 +128,45 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
   }
 
   function apply(r: { place: Place; error?: string }) { if (r.error) toast(r.error, stage); else commit(r.place); }
+  function turn(id: string, deg: number) { const g = groupOf(place, id); apply(g.length > 1 ? rotateGroup(place, g.map(i => i.id), deg) : rotateItem(place, id, deg)); }
+
+  // Pick other pieces in the same room to group with this one
+  function groupSheet(id: string) {
+    const it = place.items.find(i => i.id === id)!;
+    const others = place.items.filter(i => i.roomId === it.roomId && !i.removed && i.id !== id);
+    if (!others.length) { toast('No other pieces in this room to group with', stage); return; }
+    const boxes = others.map(o => {
+      const cb = h('input', { type: 'checkbox', style: { width: '22px', minHeight: '22px' } }) as HTMLInputElement;
+      return { o, cb, el: h('label', { class: 'row' }, cb, o.name, o.group ? h('span', { class: 'muted' }, ' (leaves its group)') : null) };
+    });
+    const err = h('div', { class: 'err', role: 'alert' });
+    const close = sheet('Group ' + it.name + ' with…', [
+      h('div', { class: 'hint' }, 'Grouped pieces move and turn together, like a desk and its chair. You can still edit, colour or remove each one.'),
+      h('div', { class: 'list' }, ...boxes.map(b => b.el)), err,
+      h('div', { class: 'row' },
+        h('button', { type: 'button', class: 'primary', onclick: () => {
+          const r = groupItems(place, [id, ...boxes.filter(b => b.cb.checked).map(b => b.o.id)]);
+          if (r.error) { err.textContent = r.error; return; }
+          close(); commit(r.place);
+        } }, 'Make group'),
+        h('button', { type: 'button', onclick: () => close() }, 'Cancel'))]);
+  }
+
+  // Colour swatches for a piece (or its whole group)
+  function colorSheet(id: string) {
+    const it = place.items.find(i => i.id === id)!, g = groupOf(place, id);
+    const all = h('input', { type: 'checkbox', style: { width: '22px', minHeight: '22px' } }) as HTMLInputElement;
+    const set = (c: string | null) => {
+      let p = place;
+      for (const m of all.checked ? g : [it]) { const r = setItemColor(p, m.id, c); if (r.error) { toast(r.error, stage); return; } p = r.place; }
+      commit(p); close();
+    };
+    const custom = h('input', { type: 'color', value: it.color ?? '#b08d64', 'aria-label': 'Any colour', style: { width: '56px', minHeight: '44px', padding: '2px' }, onchange: (e: Event) => set((e.target as HTMLInputElement).value) });
+    const close = sheet('Color of ' + it.name, [
+      h('div', { class: 'swatches' }, ...SWATCHES.map(([c, n]) => h('button', { type: 'button', class: 'swatch', title: n, 'aria-label': n, 'aria-pressed': String(it.color === c), style: { background: c }, onclick: () => set(c) }))),
+      h('div', { class: 'row' }, custom, h('span', { class: 'muted' }, 'Any other colour'), h('button', { type: 'button', onclick: () => set(null) }, 'Original look')),
+      ...(g.length > 1 ? [h('label', { class: 'row' }, all, 'Colour the whole group')] : [])]);
+  }
   function select(id: string | null) { selected = id; if (id) selRoom = null; refresh(); }
   function selectRoom(id: string | null) { selRoom = id; if (id) selected = null; refresh(); }
 
@@ -228,7 +277,7 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
 
   // Pointer handling: drag pieces, walls or whole rooms on the floor, otherwise pan/orbit
   const active = new Set<number>();
-  let drag: { id: string; ox: number; oz: number; pid: number; moved: boolean; last: Pt | null; err: string } | null = null;
+  let drag: { id: string; ox: number; oz: number; pid: number; moved: boolean; last: Pt | null; err: string; group: string[]; base: Place; gd: Pt } | null = null;
   let shape: { kind: 'wall' | 'room'; roomId: string; wall: number; start: Pt; base: Place; pid: number; moved: boolean; err: string } | null = null;
   let down: { x: number; y: number; pid: number; moved: boolean; hit: boolean } | null = null;
   const onDown = (e: PointerEvent) => {
@@ -247,7 +296,7 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
     if (hit) {
       if (selected !== hit) select(hit);
       const p = scene.floorPoint(e.clientX, e.clientY), it = sel();
-      if (p && it) { drag = { id: hit, ox: it.x - p.x, oz: it.z - p.z, pid: e.pointerId, moved: false, last: null, err: '' }; scene.controls.enabled = false; }
+      if (p && it) { drag = { id: hit, ox: it.x - p.x, oz: it.z - p.z, pid: e.pointerId, moved: false, last: null, err: '', group: mates().map(m => m.id), base: place, gd: { x: 0, z: 0 } }; scene.controls.enabled = false; }
       return;
     }
     const r = curRoom();
@@ -265,6 +314,15 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
     const room = place.rooms.find(r => r.id === it.roomId)!;
     const target = snapPoint({ x: p.x + drag.ox, z: p.z + drag.oz }, place, room);
     drag.moved = true; drag.last = target;
+    if (drag.group.length > 1) {
+      // whole group: same shift for every piece, sliding along walls when blocked
+      const b0 = drag.base.items.find(i => i.id === drag!.id)!, dx = target.x - b0.x, dz = target.z - b0.z;
+      const tries = [[dx, dz], [dx, drag.gd.z], [drag.gd.x, dz]];
+      let r: { place: Place; error?: string } = { place, error: '' };
+      for (const [x, z] of tries) { r = moveGroup(drag.base, drag.group, x, z); if (!r.error) { drag.gd = { x, z }; break; } }
+      if (r.error) { if (r.error !== drag.err) toast(r.error, stage); drag.err = r.error; return; }
+      drag.err = ''; place = r.place; refresh(); return;
+    }
     const r = moveItem(place, drag.id, target);
     if (r.error) { if (r.error !== drag.err) toast(r.error, stage); drag.err = r.error; return; }
     drag.err = ''; place = r.place; refresh();
@@ -289,7 +347,8 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
   }
   const endShape = () => { if (shape?.moved) commit(place); shape = null; };
   const endDrag = () => {
-    if (drag?.moved && drag.last) { const r = moveItem(place, drag.id, { x: sel()!.x, z: sel()!.z }, { drop: true }); if (!r.error) place = r.place; commit(place); }
+    if (drag?.moved && drag.last && drag.group.length > 1) commit(place);
+    else if (drag?.moved && drag.last) { const r = moveItem(place, drag.id, { x: sel()!.x, z: sel()!.z }, { drop: true }); if (!r.error) place = r.place; commit(place); }
     drag = null;
   };
   const onUp = (e: PointerEvent) => {

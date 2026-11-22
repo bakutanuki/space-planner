@@ -108,7 +108,7 @@ export class SceneView {
   }
 
   // Draw (or update) everything for a place
-  setPlace(place: Place, opts: { tint: boolean; overlaps: Set<string>; selected: string | null }) {
+  setPlace(place: Place, opts: { tint: boolean; overlaps: Set<string>; selected: string | null; group?: Set<string> }) {
     this.place = place;
     const rk = JSON.stringify([place.rooms, place.wallThickness, place.gridOn, place.squareCm, this.mode]);
     if (rk !== this.roomsKey) { this.roomsKey = rk; this.buildRooms(place); }
@@ -119,7 +119,7 @@ export class SceneView {
       const elev = effectiveElevation(place, it);
       const color = opts.tint ? levelForHeight(elev).color : '';
       const mounted = isWallItem(it) || (it.type === 'tv' && !it.sitsOn && it.elevation > 0);
-      const key = JSON.stringify([it.type, it.name, it.w, it.d, it.h, color, mounted]);
+      const key = JSON.stringify([it.type, it.name, it.w, it.d, it.h, color, mounted, it.color ?? '']);
       let v = this.items.get(it.id);
       if (!v || v.key !== key) {
         if (v) { this.itemsGroup.remove(v.holder); dispose(v.holder); }
@@ -133,16 +133,16 @@ export class SceneView {
       v.holder.rotation.y = (it.rot * Math.PI) / 180;
     }
     for (const [id, v] of this.items) if (!seen.has(id)) { this.itemsGroup.remove(v.holder); dispose(v.holder); this.items.delete(id); }
-    this.buildMarks(place, opts.overlaps, opts.selected);
+    this.buildMarks(place, opts.overlaps, opts.selected, opts.group ?? new Set());
     this.requestRender();
   }
 
   // Selection highlight and red overlap outlines, always drawn on top
-  private buildMarks(place: Place, overlaps: Set<string>, selected: string | null) {
+  private buildMarks(place: Place, overlaps: Set<string>, selected: string | null, group: Set<string>) {
     for (const c of [...this.marksGroup.children]) { this.marksGroup.remove(c); dispose(c); }
     for (const it of place.items) {
       if (it.removed) continue;
-      const isSel = it.id === selected, isOver = overlaps.has(it.id);
+      const isSel = it.id === selected || group.has(it.id), isOver = overlaps.has(it.id);
       if (!isSel && !isOver) continue;
       const round = it.type === 'roundTable' || it.type === 'beanbag';
       if (isSel) {

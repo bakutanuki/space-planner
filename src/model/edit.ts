@@ -112,6 +112,7 @@ export function removeItem(place: Place, id: string): EditResult {
   if (!it) return fail(place, 'Piece not found');
   it.removed = true; it.sitsOn = null;
   for (const k of p.items) if (k.sitsOn === id) k.sitsOn = null;
+  tidyGroups(p);
   return { place: p };
 }
 
@@ -130,7 +131,113 @@ export function deleteItem(place: Place, id: string): EditResult {
   const p = copy(place);
   p.items = p.items.filter(i => i.id !== id);
   for (const k of p.items) { if (k.sitsOn === id) k.sitsOn = null; k.allowOverlapWith = k.allowOverlapWith.filter(x => x !== id); }
+  tidyGroups(p);
   return { place: p };
+}
+
+// Give a piece its own colour (#rrggbb), or null for its normal look
+export function setItemColor(place: Place, id: string, color: string | null): EditResult {
+  if (color !== null && !/^#[0-9a-f]{6}$/i.test(color)) return fail(place, 'Pick a colour');
+  const p = copy(place), it = find(p, id);
+  if (!it) return fail(place, 'Piece not found');
+  it.color = color;
+  return { place: p };
+}
+
+// The pieces that move together with a piece (just itself when it's not in a group)
+export function groupOf(place: Place, id: string): Item[] {
+  const it = find(place, id);
+  if (!it || it.removed) return [];
+  return it.group ? place.items.filter(i => i.group === it.group && !i.removed) : [it];
+}
+
+// Put pieces of one room into a group so they move and turn together
+export function groupItems(place: Place, ids: string[]): EditResult {
+  const p = copy(place), its = ids.map(id => find(p, id)).filter((i): i is Item => !!i && !i.removed);
+  if (its.length < 2) return fail(place, 'Pick at least two pieces');
+  if (new Set(its.map(i => i.roomId)).size > 1) return fail(place, 'Pieces in a group must be in the same room');
+  const g = newId();
+  for (const i of its) i.group = g;
+  tidyGroups(p);
+  return { place: p };
+}
+
+// Split a group back into single pieces
+export function ungroup(place: Place, id: string): EditResult {
+  const p = copy(place), it = find(p, id);
+  if (!it?.group) return { place };
+  const g = it.group;
+  for (const i of p.items) if (i.group === g) i.group = null;
+  return { place: p };
+}
+
+// Groups left with one piece stop being groups
+function tidyGroups(p: Place) {
+  const n = new Map<string, number>();
+  for (const i of p.items) if (i.group && !i.removed) n.set(i.group, (n.get(i.group) ?? 0) + 1);
+  for (const i of p.items) if (i.group && (n.get(i.group) ?? 0) < 2) i.group = null;
+}
+
+// Moves or turns a whole group, rejecting the change if any piece would have to shift on its own
+function placeGroup(place: Place, ids: string[], to: (it: Item) => { x: number; z: number; rot: number }): EditResult {
+  const p = copy(place), set = new Set(ids);
+  const members = p.items.filter(i => set.has(i.id));
+  const tops = members.filter(i => !i.sitsOn || !set.has(i.sitsOn));
+  const extra = p.items.filter(i => !set.has(i.id) && i.sitsOn && set.has(i.sitsOn)); // things sitting on group pieces come along
+  for (const it of [...members, ...extra]) Object.assign(it, to(it));
+  for (const it of tops) {
+    if (it.sitsOn && !set.has(it.sitsOn)) it.sitsOn = null;
+    const r = placeItem(p, it, it);
+    if (!r.ok) return fail(place, r.error);
+    if (Math.abs(r.x - it.x) > 0.01 || Math.abs(r.z - it.z) > 0.01 || r.roomId !== it.roomId) return fail(place, it.name + ' would hit a wall');
+  }
+  return { place: p };
+}
+
+// Move a group by dx, dz
+export function moveGroup(place: Place, ids: string[], dx: number, dz: number): EditResult {
+  const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
+  return placeGroup(place, ids, it => ({ x: r6(it.x + dx), z: r6(it.z + dz), rot: it.rot }));
+}
+
+// Turn a group by deg degrees around its middle
+export function rotateGroup(place: Place, ids: string[], deg: number): EditResult {
+  const its = place.items.filter(i => ids.includes(i.id));
+  if (!its.length) return fail(place, 'Piece not found');
+  const cx = (Math.min(...its.map(i => i.x)) + Math.max(...its.map(i => i.x))) / 2, cz = (Math.min(...its.map(i => i.z)) + Math.max(...its.map(i => i.z))) / 2;
+  const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
+  const r = placeGroup(place, ids, it => {
+    const v = rotateVec({ x: it.x - cx, z: it.z - cz }, deg);
+    return { x: r6(cx + v.x), z: r6(cz + v.z), rot: (((it.rot + deg) % 360) + 360) % 360 };
+  });
+  return r.error ? fail(place, 'Not enough room to turn the group') : r;
+}
+
+// Copy a piece (with its group and whatever sits on it) a little to the side; returns the copy of the piece itself
+export function cloneItem(place: Place, id: string): EditResult & { id?: string } {
+  const src = groupOf(place, id);
+  if (!src.length) return fail(place, 'Piece not found');
+  const set = new Set(src.map(i => i.id));
+  for (let grew = true; grew;) { grew = false; for (const i of place.items) if (!i.removed && i.sitsOn && set.has(i.sitsOn) && !set.has(i.id)) { set.add(i.id); grew = true; } }
+  const ids = new Map([...set].map(k => [k, newId()]));
+  const g = src.length > 1 ? newId() : null;
+  const copies: Item[] = place.items.filter(i => set.has(i.id)).map(i => ({
+    ...structuredClone(i), id: ids.get(i.id)!, name: i.name, group: i.group && g ? g : null,
+    sitsOn: i.sitsOn && ids.has(i.sitsOn) ? ids.get(i.sitsOn)! : i.sitsOn, allowOverlapWith: i.allowOverlapWith.map(x => ids.get(x) ?? x),
+  }));
+  const base = { ...place, items: [...place.items, ...copies] };
+  // try nearby spots until the whole copy fits in the room
+  // try nearby spots: the first one clear of other pieces, else the first that fits in the room
+  let fallback: Place | null = null;
+  const cids = copies.map(c => c.id);
+  for (const step of [40, 80, 120, 160]) for (const [dx, dz] of [[1, 1], [-1, 1], [1, -1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const r = moveGroup(base, cids, dx * step, dz * step);
+    if (r.error) continue;
+    const ov = findOverlaps(r.place);
+    if (!cids.some(c => ov.has(c))) return { place: r.place, id: ids.get(id) };
+    fallback ??= r.place;
+  }
+  return fallback ? { place: fallback, id: ids.get(id) } : fail(place, 'No free space next to it for a copy');
 }
 
 // Accept the current overlaps of a piece (e.g. chairs under a table)

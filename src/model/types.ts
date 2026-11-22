@@ -8,6 +8,7 @@ export type ItemType = 'chair' | 'sofa' | 'bed' | 'table' | 'roundTable' | 'nigh
 export interface Item {
   id: string; type: ItemType; name: string; w: number; d: number; h: number; x: number; z: number; rot: number;
   roomId: string; elevation: number; sitsOn: string | null; allowOverlapWith: string[]; removed: boolean;
+  color?: string | null; group?: string | null; // own colour (#rrggbb) and the group it moves with
 }
 export interface Place { id: string; name: string; squareCm: number; wallThickness: number; rooms: Room[]; items: Item[]; gridOn: boolean; snapOn: boolean }
 
