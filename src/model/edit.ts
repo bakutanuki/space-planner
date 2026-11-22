@@ -106,6 +106,33 @@ export function addItem(place: Place, roomId: string, type: ItemType, name: stri
   return { place: p, id: it.id };
 }
 
+// Adds several pieces to a room, each in the free spot nearest the middle (or the middle if the room is full)
+export function addPieces(place: Place, roomId: string, specs: { type: ItemType; name: string; w: number; d: number; h: number; color?: string | null }[]): EditResult & { ids?: string[] } {
+  const room = place.rooms.find(r => r.id === roomId);
+  if (!room) return fail(place, 'Add a room first');
+  let p = place; const ids: string[] = [];
+  const b = roomBox(room), mid = mainPart(room.outline), c = { x: (mid.x0 + mid.x1) / 2, z: (mid.z0 + mid.z1) / 2 };
+  for (const s of specs) {
+    const r = addItem(p, roomId, s.type, s.name, s.w, s.d, s.h);
+    if (r.error || !r.id) return fail(place, s.name + ': ' + (r.error ?? 'could not add'));
+    p = s.color ? setItemColor(r.place, r.id, s.color).place : r.place;
+    // look over the floor in 10 cm steps for a clear spot, nearest the middle first
+    const spots: Pt[] = [];
+    for (let x = b.x0; x <= b.x1; x += 10) for (let z = b.z0; z <= b.z1; z += 10) spots.push({ x, z });
+    spots.sort((u, v) => Math.hypot(u.x - c.x, u.z - c.z) - Math.hypot(v.x - c.x, v.z - c.z));
+    for (const sp of spots) {
+      const it = p.items.find(i => i.id === r.id)!;
+      const pl = placeItem(p, it, sp);
+      if (!pl.ok || Math.abs(pl.x - sp.x) > 0.01 || Math.abs(pl.z - sp.z) > 0.01) continue;
+      const q = copy(p), qi = q.items.find(i => i.id === r.id)!;
+      Object.assign(qi, { x: pl.x, z: pl.z });
+      if (!findOverlaps(q).has(r.id)) { p = q; break; }
+    }
+    ids.push(r.id);
+  }
+  return { place: p, ids };
+}
+
 // Take a piece out (it can be added back); what sat on it stays at its own height
 export function removeItem(place: Place, id: string): EditResult {
   const p = copy(place), it = find(p, id);

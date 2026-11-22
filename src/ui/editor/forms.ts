@@ -2,8 +2,9 @@ import type { BuiltIn, ItemType, Opening, Place, Pt, Room } from '../../model/ty
 import { squareOf, TYPE_DEFAULTS, TYPE_LABELS } from '../../model/types';
 import { roomBox, wallOf } from '../../model/rooms';
 import { areaOf, wallIsLevel, wallName, wallStart } from '../../model/shape';
-import { addItem, addRoom, addRoomPart, deleteBuiltIn, deleteOpening, deleteRoom, deleteItem, renameItem, resizeItem, saveBuiltIn, saveOpening, setItemHeight, updatePlace, updateRoom, type EditResult } from '../../model/edit';
+import { addItem, addPieces, addRoom, addRoomPart, setItemColor, deleteBuiltIn, deleteOpening, deleteRoom, deleteItem, renameItem, resizeItem, saveBuiltIn, saveOpening, setItemHeight, updatePlace, updateRoom, type EditResult } from '../../model/edit';
 import { formatCm, formatBoth } from '../../model/units';
+import { MY_FURNITURE, type CatalogPiece } from '../../model/catalog';
 import { confirmDialog, h, lengthField, sheet, unitSwitch, type LengthField, type Unit } from '../dom';
 
 type Done = (p: Place) => void;
@@ -252,6 +253,7 @@ export function openFurnitureForm(place: Place, roomId: string, done: (p: Place,
     types.append(b); return [t, b] as const;
   });
   function pick(t: ItemType) {
+    color = null; note.textContent = '';
     const prevLabel = TYPE_LABELS[type];
     type = t;
     for (const [k, b] of typeBtns) b.setAttribute('aria-pressed', String(k === t));
@@ -260,12 +262,26 @@ export function openFurnitureForm(place: Place, roomId: string, done: (p: Place,
     validate();
   }
   function sync() { w.setUnit(unit, sq()); d.setUnit(unit, sq()); }
+  let color: string | null = null;
+  // one of your own pieces: fills in its type, name, exact size and colour
+  function pickMine(c: CatalogPiece) { pick(c.type); name.input.value = c.name; w.set(c.w); d.set(c.d); hh.set(c.h); el.set(0); color = c.color; note.textContent = c.note; validate(); }
+  const note = h('div', { class: 'hint' });
+  const mine = h('div', { class: 'field' }, h('label', null, 'Your furniture'),
+    h('div', { class: 'types' }, ...MY_FURNITURE.map(c => h('button', { type: 'button', onclick: () => pickMine(c) }, c.name))),
+    h('button', { type: 'button', onclick: () => {
+      const r = addPieces(place, roomSel.sel.value, MY_FURNITURE);
+      if (r.error || !r.ids) { f.err.textContent = r.error ?? 'Could not add'; return; }
+      close(); done(r.place, r.ids[0]);
+    } }, `Add all ${MY_FURNITURE.length} to this room`), note);
   const f = footer('Add', () => { const r = validate() as (EditResult & { id?: string }) | null; if (r) { close(); done(r.place, r.id!); } }, () => close());
   function validate() {
     const W = w.value(), D = d.value(), H = hh.value(), E = el.value();
-    return check(W != null && D != null && H != null && E != null, () => addItem(place, roomSel.sel.value, type, name.input.value, W!, D!, H!, E!), f);
+    return check(W != null && D != null && H != null && E != null, () => {
+      const r = addItem(place, roomSel.sel.value, type, name.input.value, W!, D!, H!, E!);
+      return r.error || !r.id || !color ? r : { ...setItemColor(r.place, r.id, color), id: r.id };
+    }, f);
   }
-  const close = sheet('+ Furniture', [types, h('div', { class: 'grid2' }, name.el, roomSel.el), unitSwitch(unit, u => { unit = u; sync(); }),
+  const close = sheet('+ Furniture', [mine, types, h('div', { class: 'grid2' }, name.el, roomSel.el), unitSwitch(unit, u => { unit = u; sync(); }),
     h('div', { class: 'grid3' }, w.el, d.el, hh.el), el.el,
     h('div', { class: 'hint' }, 'Width runs left to right as the piece faces you; depth is front to back. Sizes are exact; the shape only changes how it looks in 3D.'), f.el]);
   validate();

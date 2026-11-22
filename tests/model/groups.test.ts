@@ -53,3 +53,17 @@ describe('cloning pieces', () => {
     expect(copy.color ?? null).toBe(null);
   });
 });
+
+describe('adding your furniture', () => {
+  it('drops all pieces into clear spots with exact sizes and colours', async () => {
+    const { MY_FURNITURE } = await import('../../src/model/catalog');
+    const { addPieces } = await import('../../src/model/edit');
+    const { findOverlaps } = await import('../../src/model/overlap');
+    const p0 = addRoom(emptyPlace(), { name: 'Bedroom', w: 350, d: 420, ceiling: 240, squareCm: null }).place;
+    const r = addPieces(p0, p0.rooms[0].id, MY_FURNITURE);
+    expect(r.error).toBeUndefined();
+    expect(r.place.items.map(i => [i.w, i.d, i.h])).toEqual(MY_FURNITURE.map(c => [c.w, c.d, c.h]));
+    expect(findOverlaps(r.place).size).toBe(0);
+    expect(r.place.items[0].color).toBe('#4a4d52');
+  });
+});
