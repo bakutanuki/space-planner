@@ -1,6 +1,6 @@
 import type { Item, Place, Pt } from '../../model/types';
 import { squareOf } from '../../model/types';
-import { roomAt, roomBox, wallOf } from '../../model/rooms';
+import { doorLeaf, roomAt, roomBox, wallOf } from '../../model/rooms';
 import { pointInPoly } from '../../model/geometry';
 import { findOverlaps } from '../../model/overlap';
 import { distancesToWalls, halfExtents, snapPoint } from '../../model/placement';
@@ -291,12 +291,10 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
     const T = place.wallThickness;
     g.strokeStyle = '#8a5a2b'; g.lineWidth = 2;
     for (const r of place.rooms) for (const o of r.openings) {
-      if (o.kind !== 'door' || !o.swing || o.wall >= r.outline.length) continue;
-      const w = wallOf(r, o.wall), atStart = o.swing.hinge === 'start', inward = o.swing.into === 'room';
-      const t = atStart ? o.offset : o.offset + o.width, s = atStart ? 1 : -1;
-      const face = inward ? 0 : T, open = inward ? { x: -w.normalOut.x, z: -w.normalOut.z } : w.normalOut;
-      const hinge = { x: w.a.x + w.dir.x * t + w.normalOut.x * face, z: w.a.z + w.dir.z * t + w.normalOut.z * face };
-      const at = (ang: number) => scene.project({ x: hinge.x + o.width * (Math.cos(ang) * s * w.dir.x + Math.sin(ang) * open.x), z: hinge.z + o.width * (Math.cos(ang) * s * w.dir.z + Math.sin(ang) * open.z) });
+      const leaf = doorLeaf(r, o, T);
+      if (!leaf) continue;
+      const { hinge, shut, open } = leaf;
+      const at = (ang: number) => scene.project({ x: hinge.x + o.width * (Math.cos(ang) * shut.x + Math.sin(ang) * open.x), z: hinge.z + o.width * (Math.cos(ang) * shut.z + Math.sin(ang) * open.z) });
       const hp = scene.project(hinge), tip = at(Math.PI / 2);
       g.setLineDash([]); g.beginPath(); g.moveTo(hp.x, hp.y); g.lineTo(tip.x, tip.y); g.stroke();
       g.setLineDash([4, 3]); g.beginPath();

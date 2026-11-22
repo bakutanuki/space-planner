@@ -1,14 +1,5 @@
 
-  VITE v5.4.21  ready in 168 ms
+  VITE v5.4.21  ready in 246 ms
 
   ➜  Local:   http://localhost:5173/
   ➜  Network: use --host to expose
-11:31:22 PM [vite] page reload src/model/units.ts
-11:36:58 PM [vite] page reload src/data/repo.ts
-11:36:58 PM [vite] page reload src/ui/home.ts
-11:36:58 PM [vite] page reload src/main.ts
-11:37:08 PM [vite] page reload src/ui/home.ts
-11:41:00 PM [vite] page reload src/data/auth.ts
-11:41:00 PM [vite] page reload src/ui/home.ts
-11:41:00 PM [vite] page reload src/main.ts
-11:41:28 PM [vite] hmr update /src/styles.css

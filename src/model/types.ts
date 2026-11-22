@@ -3,7 +3,7 @@ export type Pt = { x: number; z: number };
 export type OpeningKind = 'door' | 'window';
 // Which way a door swings: into its room or out of it, hinged at the wall's start or end
 export interface Swing { into: 'room' | 'out'; hinge: 'start' | 'end' }
-export interface Opening { id: string; kind: OpeningKind; wall: number; offset: number; width: number; sill: number; top: number; swing?: Swing | null }
+export interface Opening { id: string; kind: OpeningKind; wall: number; offset: number; width: number; sill: number; top: number; swing?: Swing | 'open' | null } // swing: 'open' = doorway with no door; missing = door opening into the room, hinged at the start
 export interface BuiltIn { id: string; name: string; x: number; z: number; w: number; d: number; h: number; rot: number }
 export interface Room { id: string; name: string; outline: Pt[]; ceiling: number; squareCm: number | null; openings: Opening[]; builtIns: BuiltIn[] }
 export type ItemType = 'chair' | 'sofa' | 'bed' | 'table' | 'roundTable' | 'nightstand' | 'lamp' | 'tv' | 'poster' | 'shelf' | 'rug' | 'box' | 'beanbag' | 'treadmill';

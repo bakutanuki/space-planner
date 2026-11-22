@@ -217,6 +217,20 @@ export function connectingDoors(place: Place, roomA: string, roomB: string): { a
   return out;
 }
 
+// Where a door's leaf hangs: hinge point, the way it lies when shut, the way it points when fully open (null for an open doorway)
+export function doorLeaf(room: Room, o: Opening, wallThickness: number): { hinge: Pt; shut: Pt; open: Pt; width: number } | null {
+  if (o.kind !== 'door' || o.swing === 'open' || o.wall >= room.outline.length) return null;
+  const sw = o.swing ?? { into: 'room', hinge: 'start' };
+  const w = wallOf(room, o.wall), atStart = sw.hinge === 'start', inward = sw.into === 'room';
+  const t = atStart ? o.offset : o.offset + o.width, s = atStart ? 1 : -1, face = inward ? 0 : wallThickness;
+  return {
+    hinge: { x: w.a.x + w.dir.x * t + w.normalOut.x * face, z: w.a.z + w.dir.z * t + w.normalOut.z * face },
+    shut: { x: s * w.dir.x, z: s * w.dir.z },
+    open: inward ? { x: -w.normalOut.x, z: -w.normalOut.z } : w.normalOut,
+    width: o.width,
+  };
+}
+
 // Which room contains a point (if any)
 export function roomAt(place: Place, p: Pt): Room | undefined {
   return place.rooms.find(r => pointInPoly(p, r.outline));

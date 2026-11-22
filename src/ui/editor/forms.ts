@@ -147,7 +147,7 @@ export function openOpeningForm(place: Place, roomId: string, done: Done, existi
   let unit = defaultUnit(place);
   const room0 = place.rooms.find(r => r.id === roomId) ?? place.rooms[0];
   if (!room0) return;
-  const kind = selectField('Type', [['door', 'Door (or open doorway)'], ['window', 'Window']], existing?.kind ?? 'door', () => { show(); validate(); });
+  const kind = selectField('Type', [['door', 'Door or doorway'], ['window', 'Window']], existing?.kind ?? 'door', () => { show(); validate(); });
   const roomSel = selectField('Room', roomOptions(place), room0.id, () => { sync(); validate(); });
   const room = () => place.rooms.find(r => r.id === roomSel.sel.value)!;
   const wall = selectField('Wall', wallOptions(room0), String(existing?.wall ?? 0), () => { sync(); validate(); });
@@ -158,18 +158,18 @@ export function openOpeningForm(place: Place, roomId: string, done: Done, existi
   const sill = lengthField('Sill height (floor to bottom of window)', existing?.kind === 'window' ? existing.sill : 100, 'cm', sq(), () => validate(), { allowZero: true });
   const top = lengthField('Top height (floor to top of opening)', existing?.top ?? 205, 'cm', sq(), () => validate());
   const sillWrap = h('div', null, sill.el);
-  const sw0 = existing?.swing ? `${existing.swing.into}-${existing.swing.hinge}` : 'none';
-  const swing = selectField('Show which way it opens', [], sw0, () => { hooks.highlightWall?.(room().id, Number(wall.sel.value)); validate(); });
+  const sw0 = existing?.swing === 'open' ? 'open' : existing?.swing ? `${existing.swing.into}-${existing.swing.hinge}` : 'room-start';
+  const swing = selectField('Door', [], sw0, () => { hooks.highlightWall?.(room().id, Number(wall.sel.value)); validate(); });
   const swingWrap = h('div', null, swing.el);
   // labels in screen terms: which end of the wall the hinge is at
   function swingOptions() {
     const keep = swing.sel.value || sw0, wi = Number(wall.sel.value), st = wallStart(room().outline, wi).replace(' end', '');
     const other = ({ left: 'right', right: 'left', top: 'bottom', bottom: 'top' } as Record<string, string>)[st] ?? 'other';
-    swing.sel.replaceChildren(...([['none', "Don't show"], ['room-start', `Opens into ${room().name}, hinge on the ${st}`], ['room-end', `Opens into ${room().name}, hinge on the ${other}`],
+    swing.sel.replaceChildren(...([['open', 'No door (open doorway)'], ['room-start', `Opens into ${room().name}, hinge on the ${st}`], ['room-end', `Opens into ${room().name}, hinge on the ${other}`],
       ['out-start', `Opens outward, hinge on the ${st}`], ['out-end', `Opens outward, hinge on the ${other}`]] as [string, string][]).map(([v, t]) => h('option', { value: v }, t)));
     swing.sel.value = keep;
   }
-  const swingValue = (): Swing | null => { const v = swing.sel.value; if (kind.sel.value !== 'door' || !v || v === 'none') return null; const [into, hinge] = v.split('-'); return { into: into as Swing['into'], hinge: hinge as Swing['hinge'] }; };
+  const swingValue = (): Swing | 'open' | null => { const v = swing.sel.value; if (kind.sel.value !== 'door' || !v) return null; if (v === 'open') return 'open'; const [into, hinge] = v.split('-'); return { into: into as Swing['into'], hinge: hinge as Swing['hinge'] }; };
   function show() { sillWrap.style.display = kind.sel.value === 'window' ? '' : 'none'; swingWrap.style.display = kind.sel.value === 'door' ? '' : 'none'; if (!existing) top.set(kind.sel.value === 'window' ? 210 : 205); }
   function sync() {
     width.setUnit(unit, sq()); off.setUnit(unit, sq());

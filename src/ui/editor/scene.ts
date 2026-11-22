@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { Item, Place, Pt, Room } from '../../model/types';
 import { squareOf } from '../../model/types';
-import { buildWalls, roomBox } from '../../model/rooms';
+import { buildWalls, doorLeaf, roomBox } from '../../model/rooms';
 import { areaOf, mainPart } from '../../model/shape';
 import { effectiveElevation } from '../../model/stacking';
 import { levelForHeight } from '../../model/levels';
@@ -168,6 +168,17 @@ export class SceneView {
         ? [room.name, `${formatSquares(b.x1 - b.x0, sq).replace(' sq', '')} × ${formatSquares(b.z1 - b.z0, sq)}`, `${formatM(b.x1 - b.x0).replace(' m', '')} × ${formatM(b.z1 - b.z0)}`]
         : [room.name, `${(areaOf(room.outline) / 10000).toFixed(2)} m²`];
       this.roomsGroup.add(floorLabel(lines, M(b.x0 + b.x1) / 2, M(b.z0 + b.z1) / 2, Math.min(M(b.x1 - b.x0) * 0.75, 2.4)));
+      // door leaves, standing fully open
+      for (const o of room.openings) {
+        const leaf = doorLeaf(room, o, place.wallThickness);
+        if (!leaf) continue;
+        const g = new THREE.Group(), lw = M(o.width) - 0.01, lh = M(Math.min(o.top, room.ceiling)) - 0.01;
+        box(lw, lh, 0.035, mat(0xcdb999, { r: 0.6 }), lw / 2, lh / 2, 0, g);
+        box(0.02, 0.02, 0.06, mat(0x8a8a8a, { m: 0.6, r: 0.3 }), lw - 0.08, 1.0, 0, g);
+        g.position.set(M(leaf.hinge.x + leaf.shut.x * 1.75), 0, M(leaf.hinge.z + leaf.shut.z * 1.75)); // leaf lies just inside the frame
+        g.rotation.y = Math.atan2(-leaf.open.z, leaf.open.x);
+        this.roomsGroup.add(g);
+      }
       for (const bi of room.builtIns) {
         const g = new THREE.Group();
         box(M(bi.w), M(bi.h), M(bi.d), mat(0x1c1916, { r: 0.6 }), 0, M(bi.h) / 2, 0, g);
