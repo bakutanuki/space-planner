@@ -1,4 +1,4 @@
-import type { BuiltIn, ItemType, Opening, Place, Pt, Room } from '../../model/types';
+import type { BuiltIn, ItemType, Opening, Place, Pt, Room, Swing } from '../../model/types';
 import { squareOf, TYPE_DEFAULTS, TYPE_LABELS } from '../../model/types';
 import { roomBox, wallOf } from '../../model/rooms';
 import { areaOf, wallIsLevel, wallName, wallStart } from '../../model/shape';
@@ -158,22 +158,35 @@ export function openOpeningForm(place: Place, roomId: string, done: Done, existi
   const sill = lengthField('Sill height (floor to bottom of window)', existing?.kind === 'window' ? existing.sill : 100, 'cm', sq(), () => validate(), { allowZero: true });
   const top = lengthField('Top height (floor to top of opening)', existing?.top ?? 205, 'cm', sq(), () => validate());
   const sillWrap = h('div', null, sill.el);
-  function show() { sillWrap.style.display = kind.sel.value === 'window' ? '' : 'none'; if (!existing) top.set(kind.sel.value === 'window' ? 210 : 205); }
+  const sw0 = existing?.swing ? `${existing.swing.into}-${existing.swing.hinge}` : 'none';
+  const swing = selectField('Show which way it opens', [], sw0, () => { hooks.highlightWall?.(room().id, Number(wall.sel.value)); validate(); });
+  const swingWrap = h('div', null, swing.el);
+  // labels in screen terms: which end of the wall the hinge is at
+  function swingOptions() {
+    const keep = swing.sel.value || sw0, wi = Number(wall.sel.value), st = wallStart(room().outline, wi).replace(' end', '');
+    const other = ({ left: 'right', right: 'left', top: 'bottom', bottom: 'top' } as Record<string, string>)[st] ?? 'other';
+    swing.sel.replaceChildren(...([['none', "Don't show"], ['room-start', `Opens into ${room().name}, hinge on the ${st}`], ['room-end', `Opens into ${room().name}, hinge on the ${other}`],
+      ['out-start', `Opens outward, hinge on the ${st}`], ['out-end', `Opens outward, hinge on the ${other}`]] as [string, string][]).map(([v, t]) => h('option', { value: v }, t)));
+    swing.sel.value = keep;
+  }
+  const swingValue = (): Swing | null => { const v = swing.sel.value; if (kind.sel.value !== 'door' || !v || v === 'none') return null; const [into, hinge] = v.split('-'); return { into: into as Swing['into'], hinge: hinge as Swing['hinge'] }; };
+  function show() { sillWrap.style.display = kind.sel.value === 'window' ? '' : 'none'; swingWrap.style.display = kind.sel.value === 'door' ? '' : 'none'; if (!existing) top.set(kind.sel.value === 'window' ? 210 : 205); }
   function sync() {
     width.setUnit(unit, sq()); off.setUnit(unit, sq());
     if (wall.sel.options.length !== room().outline.length || wall.sel.dataset.room !== room().id) { setWallOptions(wall.sel, room()); wall.sel.dataset.room = room().id; }
     const wi = Number(wall.sel.value);
     offHint.textContent = `Measured from the wall's ${wallStart(room().outline, wi)}. This wall is ${formatBoth(wallOf(room(), wi).length, sq())}.`;
+    swingOptions();
     hooks.highlightWall?.(room().id, wi);
   }
   const f = footer(existing ? 'Save' : 'Add', () => { const r = validate(); if (r) { close(); done(r.place); } }, () => close());
   function validate() {
     const W = width.value(), O = off.value(), S = kind.sel.value === 'window' ? sill.value() : 0, T = top.value();
     return check(W != null && O != null && S != null && T != null, () => saveOpening(place, roomSel.sel.value, {
-      id: existing && roomSel.sel.value === roomId ? existing.id : undefined, kind: kind.sel.value as Opening['kind'], wall: Number(wall.sel.value), offset: O!, width: W!, sill: S!, top: T!,
+      id: existing && roomSel.sel.value === roomId ? existing.id : undefined, kind: kind.sel.value as Opening['kind'], wall: Number(wall.sel.value), offset: O!, width: W!, sill: S!, top: T!, swing: swingValue(),
     }), f);
   }
-  const body: Node[] = [unitSwitch(unit, u => { unit = u; sync(); }), h('div', { class: 'grid2' }, kind.el, roomSel.el), wall.el, h('div', { class: 'grid2' }, width.el, off.el), offHint, h('div', { class: 'grid2' }, sillWrap, top.el), f.el];
+  const body: Node[] = [unitSwitch(unit, u => { unit = u; sync(); }), h('div', { class: 'grid2' }, kind.el, roomSel.el), wall.el, h('div', { class: 'grid2' }, width.el, off.el), offHint, h('div', { class: 'grid2' }, sillWrap, top.el), swingWrap, f.el];
   if (existing) body.push(h('button', { type: 'button', class: 'warn', onclick: async () => { if (await confirmDialog('Delete this ' + existing.kind + '?', 'Delete')) { close(); done(deleteOpening(place, roomId, existing.id).place); } } }, 'Delete ' + existing.kind));
   const close = sheet(existing ? 'Edit ' + existing.kind : '+ Door or window', body, { onClose: () => hooks.highlightWall?.(null, 0) });
   show(); sync(); validate();

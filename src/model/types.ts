@@ -1,7 +1,9 @@
 // All lengths are centimetres; x runs right, z runs down the plan (towards the viewer in 3D)
 export type Pt = { x: number; z: number };
 export type OpeningKind = 'door' | 'window';
-export interface Opening { id: string; kind: OpeningKind; wall: number; offset: number; width: number; sill: number; top: number }
+// Which way a door swings: into its room or out of it, hinged at the wall's start or end
+export interface Swing { into: 'room' | 'out'; hinge: 'start' | 'end' }
+export interface Opening { id: string; kind: OpeningKind; wall: number; offset: number; width: number; sill: number; top: number; swing?: Swing | null }
 export interface BuiltIn { id: string; name: string; x: number; z: number; w: number; d: number; h: number; rot: number }
 export interface Room { id: string; name: string; outline: Pt[]; ceiling: number; squareCm: number | null; openings: Opening[]; builtIns: BuiltIn[] }
 export type ItemType = 'chair' | 'sofa' | 'bed' | 'table' | 'roundTable' | 'nightstand' | 'lamp' | 'tv' | 'poster' | 'shelf' | 'rug' | 'box' | 'beanbag' | 'treadmill';

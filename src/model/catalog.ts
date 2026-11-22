@@ -11,5 +11,7 @@ export const MY_FURNITURE: CatalogPiece[] = [
   { type: 'rug', name: 'Grey rug', w: 200, d: 160, h: 1, color: '#c9c8c3', note: 'Fortunate Bee rug, light grey, 200 × 160 cm.' },
   { type: 'nightstand', name: 'Nightstand with charger', w: 37, d: 28, h: 62, color: '#6b4a33', note: 'Brown nightstand with charging spot.' },
   { type: 'box', name: 'TV stand (140)', w: 140, d: 40, h: 54, color: '#5a3d2b', note: 'BlueDreamer 951 media rack: 2 doors, metal legs, 140 × 40 × 54 cm.' },
+  { type: 'table', name: 'Dining table', w: 160, d: 90, h: 75, color: null, note: '160 × 90 cm top, 75 cm tall.' },
+  { type: 'chair', name: 'Grey dining chair', w: 48, d: 49, h: 90, color: '#c8c8c6', note: 'Light grey upholstered chair, 48 wide × 49 deep × 90 tall. Use Clone for more.' },
   { type: 'box', name: 'Bookshelf', w: 60, d: 30, h: 194, color: null, note: '60 wide × 30 deep × 194 tall.' },
 ];

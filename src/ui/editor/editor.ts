@@ -29,8 +29,10 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
   const status = h('button', { type: 'button', class: 'ghost status', 'aria-live': 'polite' });
   const viewBtn = h('button', { type: 'button', 'aria-label': 'Show 3D view', onclick: () => setMode(scene.mode === '2d' ? '3d' : '2d') }, '3D');
   const title = h('h1', null, place.name);
+  const undoBtn = h('button', { type: 'button', class: 'icon', 'aria-label': 'Undo', title: 'Undo', onclick: () => undo() }, '↶');
+  const redoBtn = h('button', { type: 'button', class: 'icon', 'aria-label': 'Redo', title: 'Redo', onclick: () => redo() }, '↷');
   const bar = h('header', { class: 'bar' },
-    h('button', { type: 'button', class: 'ghost', 'aria-label': 'Back to my places', onclick: onBack }, '‹'), title, status, viewBtn,
+    h('button', { type: 'button', class: 'ghost', 'aria-label': 'Back to my places', onclick: onBack }, '‹'), title, status, undoBtn, redoBtn, viewBtn,
     h('button', { type: 'button', 'aria-label': 'More', onclick: () => moreMenu() }, '⋯'));
   const scopes = h('nav', { class: 'scopes', 'aria-label': 'Choose what to show' });
   const overlay = h('canvas', { class: 'overlay2d' });
@@ -42,7 +44,22 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
   const scene = new SceneView(stage);
   scene.onRender = () => drawOverlay();
 
-  const commit = (p: Place, save = true) => { place = p; title.textContent = p.name; if (save) onChange(p); refresh(); };
+  // Undo/redo keep whole snapshots of the place; a drag counts as one step
+  let committed = initial;
+  const undoStack: Place[] = [], redoStack: Place[] = [];
+  const commit = (p: Place, save = true) => {
+    if (p !== committed) { undoStack.push(committed); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; }
+    committed = p; place = p; title.textContent = p.name; if (save) onChange(p); refresh();
+  };
+  function history(from: Place[], to: Place[]) {
+    const p = from.pop();
+    if (!p) return;
+    to.push(committed); committed = p; place = p; title.textContent = p.name;
+    if (selected && !p.items.some(i => i.id === selected && !i.removed)) selected = null;
+    if (selRoom && !p.rooms.some(r => r.id === selRoom)) selRoom = null;
+    onChange(p); refresh();
+  }
+  const undo = () => history(undoStack, redoStack), redo = () => history(redoStack, undoStack);
   const hooks = {
     highlightWall: (roomId: string | null, wall: number) => { wallMark = roomId ? { roomId, wall } : null; scene.requestRender(); },
     preview: (o: Pt[] | null) => { preview = o; scene.requestRender(); },
@@ -70,6 +87,7 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
   }
 
   function refresh() {
+    undoBtn.disabled = !undoStack.length; redoBtn.disabled = !redoStack.length;
     const overlaps = findOverlaps(place);
     scene.setPlace(place, { tint, overlaps: new Set(overlaps.keys()), selected, group: new Set(mates().map(i => i.id)) });
     legend.style.display = tint ? '' : 'none';
@@ -233,6 +251,7 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
       path(g, preview); g.fillStyle = 'rgba(47,111,222,.18)'; g.fill();
       g.strokeStyle = BLUE; g.lineWidth = 2; g.setLineDash([6, 4]); g.stroke(); g.setLineDash([]);
     }
+    if (scene.mode === '2d') drawSwings(g);
     const room = curRoom();
     if (room) {
       path(g, room.outline); g.fillStyle = 'rgba(47,111,222,.10)'; g.fill();
@@ -264,6 +283,25 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
       const a = scene.project(d.from), b = scene.project(d.to);
       g.strokeStyle = BLUE; g.lineWidth = 1.5; g.setLineDash([4, 3]); g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke(); g.setLineDash([]);
       label(g, formatCm(d.cm), (a.x + b.x) / 2, (a.y + b.y) / 2);
+    }
+  }
+
+  // Door swing arcs: the leaf fully open plus the quarter circle its edge travels
+  function drawSwings(g: CanvasRenderingContext2D) {
+    const T = place.wallThickness;
+    g.strokeStyle = '#8a5a2b'; g.lineWidth = 2;
+    for (const r of place.rooms) for (const o of r.openings) {
+      if (o.kind !== 'door' || !o.swing || o.wall >= r.outline.length) continue;
+      const w = wallOf(r, o.wall), atStart = o.swing.hinge === 'start', inward = o.swing.into === 'room';
+      const t = atStart ? o.offset : o.offset + o.width, s = atStart ? 1 : -1;
+      const face = inward ? 0 : T, open = inward ? { x: -w.normalOut.x, z: -w.normalOut.z } : w.normalOut;
+      const hinge = { x: w.a.x + w.dir.x * t + w.normalOut.x * face, z: w.a.z + w.dir.z * t + w.normalOut.z * face };
+      const at = (ang: number) => scene.project({ x: hinge.x + o.width * (Math.cos(ang) * s * w.dir.x + Math.sin(ang) * open.x), z: hinge.z + o.width * (Math.cos(ang) * s * w.dir.z + Math.sin(ang) * open.z) });
+      const hp = scene.project(hinge), tip = at(Math.PI / 2);
+      g.setLineDash([]); g.beginPath(); g.moveTo(hp.x, hp.y); g.lineTo(tip.x, tip.y); g.stroke();
+      g.setLineDash([4, 3]); g.beginPath();
+      for (let k = 0; k <= 24; k++) { const q = at((k / 24) * Math.PI / 2); if (k) g.lineTo(q.x, q.y); else g.moveTo(q.x, q.y); }
+      g.stroke(); g.setLineDash([]);
     }
   }
 
@@ -367,6 +405,12 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
     }
     if (!active.size) scene.controls.enabled = true;
   };
+  const onKey = (e: KeyboardEvent) => {
+    if (!(e.ctrlKey || e.metaKey) || (e.target as HTMLElement)?.closest?.('input,textarea,select')) return;
+    const k = e.key.toLowerCase();
+    if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); } else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
+  };
+  window.addEventListener('keydown', onKey);
   stage.addEventListener('pointerdown', onDown, true);
   window.addEventListener('pointermove', onMove);
   window.addEventListener('pointerup', onUp);
@@ -377,9 +421,9 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
   if (!place.rooms.length) setTimeout(() => openRoomForm(place, p => { commit(p); scope = p.rooms[0].id; scene.frame(scopeBox()); }, hooks), 100);
 
   return {
-    destroy() { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', onUp); scene.dispose(); },
+    destroy() { window.removeEventListener('keydown', onKey); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', onUp); scene.dispose(); },
     setStatus(text, cls, onClick) { status.textContent = text; status.className = 'ghost status ' + cls; status.onclick = onClick ?? null; },
-    replacePlace(p) { place = p; title.textContent = p.name; if (selected && !p.items.some(i => i.id === selected)) selected = null; if (selRoom && !p.rooms.some(r => r.id === selRoom)) selRoom = null; refresh(); },
+    replacePlace(p) { place = p; committed = p; undoStack.length = 0; redoStack.length = 0; title.textContent = p.name; if (selected && !p.items.some(i => i.id === selected)) selected = null; if (selRoom && !p.rooms.some(r => r.id === selRoom)) selRoom = null; refresh(); },
     current: () => place,
   };
 }

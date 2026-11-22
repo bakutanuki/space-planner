@@ -102,3 +102,5 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 8px; }
 .swatch { min-height: 44px; border-radius: 10px; border: 1px solid rgba(0,0,0,.15); padding: 0; }
 .swatch[aria-pressed="true"] { outline: 3px solid var(--accent, #2f6fde); outline-offset: 2px; }
+.bar .icon { min-width: 40px; padding: 0 8px; font-size: 20px; }
+.bar .icon:disabled { opacity: .35; }
