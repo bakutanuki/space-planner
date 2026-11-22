@@ -3,7 +3,9 @@ import { LEVELS } from './levels';
 import { placeItem } from './placement';
 import { canSitOn, childrenOf, effectiveElevation } from './stacking';
 import { findOverlaps } from './overlap';
-import { attachRoom, checkBuiltIn, checkOpening, createRoom, roomBox, roomOverlap } from './rooms';
+import { attachRoom, checkBuiltIn, checkOpening, createRoom, remapOpenings, roomBox, roomOverlap, wallOf } from './rooms';
+import { addRect, mainPart, moveWall, partsOf, validShape } from './shape';
+import { aabb } from './geometry';
 import { rotateVec } from './geometry';
 import { newItem } from './seed';
 import { newId } from './types';
@@ -92,7 +94,7 @@ export function addItem(place: Place, roomId: string, type: ItemType, name: stri
   const room = place.rooms.find(r => r.id === roomId);
   if (!room) return fail(place, 'Add a room first');
   if (![w, d, h].every(v => v > 0 && v <= 5000)) return fail(place, 'Sizes must be more than 0');
-  const b = roomBox(room);
+  const b = mainPart(room.outline);
   const it = { ...newItem(type, w, d, h, name.trim() || type, roomId), elevation };
   const c = { x: (b.x0 + b.x1) / 2, z: (b.z0 + b.z1) / 2 };
   Object.assign(it, c);
@@ -166,6 +168,7 @@ export function updateRoom(place: Place, roomId: string, ch: { name?: string; ce
   if (ch.ceiling !== undefined) { if (!(ch.ceiling > 0)) return fail(place, 'Ceiling must be more than 0'); room.ceiling = ch.ceiling; }
   if (ch.squareCm !== undefined) room.squareCm = ch.squareCm;
   if (ch.w !== undefined || ch.d !== undefined) {
+    if (room.outline.length !== 4) return fail(place, 'This room has more than 4 walls: drag its walls in the plan to resize it');
     const b = roomBox(room), w = ch.w ?? b.x1 - b.x0, d = ch.d ?? b.z1 - b.z0;
     if (!(w > 0 && d > 0)) return fail(place, 'Sizes must be more than 0');
     const nb = { x0: b.x0, z0: b.z0, x1: b.x0 + w, z1: b.z0 + d };
@@ -181,6 +184,110 @@ export function updateRoom(place: Place, roomId: string, ch: { name?: string; ce
     }
   }
   return { place: p };
+}
+
+// Gives a room a new outline if doors, windows, built-ins and furniture still fit (mutates p)
+function reshape(p: Place, room: Room, outline: Pt[], moved?: { wall: number; dx: number; dz: number }): string | null {
+  if (!validShape(outline)) return 'Walls would cross';
+  const hit = roomOverlap(p, partsOf(outline), room.id);
+  if (hit) return 'Too close to ' + hit;
+  const openings = remapOpenings(room, outline, moved);
+  if (!openings) return 'A door or window is in the way';
+  room.outline = outline; room.openings = openings;
+  for (const bi of room.builtIns) if (checkBuiltIn(room, bi)) return bi.name + ' would no longer fit';
+  for (const it of p.items.filter(i => i.roomId === room.id && !i.removed)) {
+    const r = placeItem(p, it, it);
+    if (!r.ok) return it.name + ' would no longer fit';
+    Object.assign(it, { x: r.x, z: r.z, rot: r.rot });
+  }
+  return null;
+}
+
+// Slide one wall of a room in or out by delta cm (positive = outwards)
+export function moveRoomWall(place: Place, roomId: string, wall: number, delta: number): EditResult {
+  const p = copy(place), room = p.rooms.find(r => r.id === roomId);
+  if (!room) return fail(place, 'Room not found');
+  const n = wallOf(room, wall).normalOut;
+  const o = moveWall(room.outline, wall, delta);
+  if (!o) return fail(place, 'The room would get too small');
+  const err = reshape(p, room, o, { wall, dx: n.x * delta, dz: n.z * delta });
+  return err ? fail(place, err) : { place: p };
+}
+
+// Add a rectangle onto the outside of a room's wall, making one bigger room (an L, a T…)
+export function addRoomPart(place: Place, roomId: string, s: { wall: number; offset: number; along: number; out: number }): EditResult {
+  if (!(s.along > 0 && s.out > 0)) return fail(place, 'Sizes must be more than 0');
+  const p = copy(place), room = p.rooms.find(r => r.id === roomId);
+  if (!room) return fail(place, 'Room not found');
+  if (s.wall < 0 || s.wall >= room.outline.length) return fail(place, 'Pick a wall');
+  const { a, dir, normalOut: n } = wallOf(room, s.wall);
+  const p0 = { x: a.x + dir.x * s.offset, z: a.z + dir.z * s.offset }, p1 = { x: p0.x + dir.x * s.along, z: p0.z + dir.z * s.along };
+  const box = aabb([p0, p1, { x: p0.x + n.x * s.out, z: p0.z + n.z * s.out }, { x: p1.x + n.x * s.out, z: p1.z + n.z * s.out }]);
+  const o = addRect(room.outline, box);
+  if (!o) return fail(place, "That part doesn't join onto the room");
+  const err = reshape(p, room, o);
+  return err ? fail(place, err) : { place: p };
+}
+
+// Move a room (with its built-ins and furniture) by dx, dz
+export function moveRoom(place: Place, roomId: string, dx: number, dz: number): EditResult {
+  const p = copy(place), room = p.rooms.find(r => r.id === roomId);
+  if (!room) return fail(place, 'Room not found');
+  const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
+  room.outline = room.outline.map(q => ({ x: r6(q.x + dx), z: r6(q.z + dz) }));
+  const hit = roomOverlap(p, partsOf(room.outline), roomId);
+  if (hit) return fail(place, 'Too close to ' + hit);
+  for (const b of room.builtIns) { b.x = r6(b.x + dx); b.z = r6(b.z + dz); }
+  for (const it of p.items) if (it.roomId === roomId) { it.x = r6(it.x + dx); it.z = r6(it.z + dz); }
+  return { place: p };
+}
+
+// Copy of a room with its doors, windows and built-ins (no furniture), placed beside the others
+export function cloneRoom(place: Place, roomId: string): EditResult & { id?: string } {
+  const src = place.rooms.find(r => r.id === roomId);
+  if (!src) return fail(place, 'Room not found');
+  const p = copy(place), b = roomBox(src);
+  const dx = Math.max(...place.rooms.map(r => roomBox(r).x1)) + 100 - b.x0;
+  const room: Room = { ...structuredClone(src), id: newId(), name: src.name + ' copy' };
+  room.outline = room.outline.map(q => ({ x: q.x + dx, z: q.z }));
+  room.openings = room.openings.map(o => ({ ...o, id: newId() }));
+  room.builtIns = room.builtIns.map(bi => ({ ...bi, id: newId(), x: bi.x + dx }));
+  p.rooms.push(room);
+  return { place: p, id: room.id };
+}
+
+// Nudges a room move so its walls line up with nearby rooms (one wall apart or flush); tol in cm
+export function snapRoomMove(place: Place, roomId: string, dx: number, dz: number, tol: number): { dx: number; dz: number } {
+  const room = place.rooms.find(r => r.id === roomId);
+  if (!room) return { dx, dz };
+  const t = place.wallThickness, others = place.rooms.filter(r => r.id !== roomId).flatMap(r => r.outline);
+  const fixes = (mine: number[], cands: number[], d: number) => {
+    const out = [0];
+    for (const m of mine) for (const c of cands) { const f = c - (m + d); if (Math.abs(f) < tol) out.push(f); }
+    return out.sort((a, b) => Math.abs(a) - Math.abs(b));
+  };
+  const fx = fixes(room.outline.map(q => q.x), others.flatMap(q => [q.x, q.x - t, q.x + t]), dx);
+  const fz = fixes(room.outline.map(q => q.z), others.flatMap(q => [q.z, q.z - t, q.z + t]), dz);
+  const pairs = fx.flatMap(a => fz.map(b => [a, b])).sort((p, q) => Math.abs(p[0]) + Math.abs(p[1]) - Math.abs(q[0]) - Math.abs(q[1]));
+  // smallest nudge that doesn't overlap
+  for (const [ax, az] of pairs) {
+    const o = room.outline.map(q => ({ x: q.x + dx + ax, z: q.z + dz + az }));
+    if (!roomOverlap(place, partsOf(o), roomId)) return { dx: dx + ax, dz: dz + az };
+  }
+  return { dx, dz };
+}
+
+// Nudges a wall move so the wall lines up with other walls nearby (one wall apart, or flush); tol in cm
+export function snapWallMove(place: Place, roomId: string, wall: number, delta: number, tol: number): number {
+  const room = place.rooms.find(r => r.id === roomId);
+  if (!room) return delta;
+  const w = wallOf(room, wall), t = place.wallThickness, horiz = Math.abs(w.normalOut.z) > 0.5;
+  const pos = (horiz ? w.a.z : w.a.x) + (horiz ? w.normalOut.z : w.normalOut.x) * delta;
+  const own = room.outline.filter((_, i) => i !== wall && i !== (wall + 1) % room.outline.length).map(q => (horiz ? q.z : q.x));
+  const others = place.rooms.filter(r => r.id !== roomId).flatMap(r => r.outline).flatMap(q => { const v = horiz ? q.z : q.x; return [v, v - t, v + t]; });
+  let fix = 0, bestErr = tol;
+  for (const c of [...own, ...others]) { const e = Math.abs(c - pos); if (e < bestErr) { bestErr = e; fix = c - pos; } }
+  return delta + fix * (horiz ? w.normalOut.z : w.normalOut.x);
 }
 
 // Delete a room and everything in it

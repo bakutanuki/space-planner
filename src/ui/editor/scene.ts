@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { Item, Place, Pt, Room } from '../../model/types';
 import { squareOf } from '../../model/types';
 import { buildWalls, roomBox } from '../../model/rooms';
+import { areaOf, mainPart } from '../../model/shape';
 import { effectiveElevation } from '../../model/stacking';
 import { levelForHeight } from '../../model/levels';
 import { isWallItem } from '../../model/placement';
@@ -162,8 +163,10 @@ export class SceneView {
     const two = this.mode === '2d';
     for (const room of place.rooms) {
       this.roomsGroup.add(floorMesh(room, squareOf(place, room), place.gridOn, this.renderer));
-      const b = roomBox(room), sq = squareOf(place, room);
-      const lines = [room.name, `${formatSquares(b.x1 - b.x0, sq).replace(' sq', '')} × ${formatSquares(b.z1 - b.z0, sq)}`, `${formatM(b.x1 - b.x0).replace(' m', '')} × ${formatM(b.z1 - b.z0)}`];
+      const b = room.outline.length === 4 ? roomBox(room) : mainPart(room.outline), sq = squareOf(place, room);
+      const lines = room.outline.length === 4
+        ? [room.name, `${formatSquares(b.x1 - b.x0, sq).replace(' sq', '')} × ${formatSquares(b.z1 - b.z0, sq)}`, `${formatM(b.x1 - b.x0).replace(' m', '')} × ${formatM(b.z1 - b.z0)}`]
+        : [room.name, `${(areaOf(room.outline) / 10000).toFixed(2)} m²`];
       this.roomsGroup.add(floorLabel(lines, M(b.x0 + b.x1) / 2, M(b.z0 + b.z1) / 2, Math.min(M(b.x1 - b.x0) * 0.75, 2.4)));
       for (const bi of room.builtIns) {
         const g = new THREE.Group();
@@ -257,7 +260,7 @@ function dispose(o: THREE.Object3D) {
     const m = x as THREE.Mesh;
     m.geometry?.dispose();
     const mats = Array.isArray(m.material) ? m.material : m.material ? [m.material] : [];
-    for (const mm of mats) { (mm as THREE.MeshStandardMaterial).map?.dispose(); mm.dispose(); }
+    for (const mm of mats) { const map = (mm as THREE.MeshStandardMaterial).map; if (map && !map.userData.shared) map.dispose(); mm.dispose(); }
   });
 }
 
@@ -280,30 +283,39 @@ function strip(pts: Pt[], width: number, color: number): THREE.Group {
   return g;
 }
 
-// Floor with tile texture; grid lines start at the room's corner and match the room's square size
-function floorMesh(room: Room, squareCm: number, grid: boolean, renderer: THREE.WebGLRenderer): THREE.Mesh {
-  const b = roomBox(room), w = M(b.x1 - b.x0), d = M(b.z1 - b.z0);
-  const px = Math.min(200, 2048 / Math.max(w, d));
-  const cw = Math.max(2, Math.round(w * px)), ch = Math.max(2, Math.round(d * px));
-  const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+const floorTex = new Map<string, THREE.CanvasTexture>();
+// One repeating floor tile (a square with its grid line, or plain), shared by every floor that uses it
+function tileTexture(tileCm: number, grid: boolean, renderer: THREE.WebGLRenderer): THREE.CanvasTexture {
+  const key = tileCm + ':' + grid;
+  const hit = floorTex.get(key);
+  if (hit) return hit;
+  const n = 256, c = document.createElement('canvas'); c.width = c.height = n;
   const g = c.getContext('2d')!;
-  g.fillStyle = '#dccfb8'; g.fillRect(0, 0, cw, ch);
+  g.fillStyle = '#dccfb8'; g.fillRect(0, 0, n, n);
   let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  for (let i = 0; i < (cw * ch) / 90; i++) {
+  const dots = Math.min(4000, (n * n * Math.max(0.15, 30 / tileCm)) / 90);
+  for (let i = 0; i < dots; i++) {
     g.fillStyle = rnd() < 0.5 ? 'rgba(150,130,100,0.18)' : 'rgba(255,255,255,0.22)';
-    g.fillRect(rnd() * cw, rnd() * ch, 1 + rnd() * 3, 1 + rnd() * 2);
+    g.fillRect(rnd() * n, rnd() * n, 1 + rnd() * 3, 1 + rnd() * 2);
   }
-  if (grid) {
-    g.strokeStyle = '#b4a68e'; g.lineWidth = 2;
-    const t = M(squareCm) * px;
-    for (let x = 0; x <= cw + 1; x += t) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, ch); g.stroke(); }
-    for (let y = 0; y <= ch + 1; y += t) { g.beginPath(); g.moveTo(0, y); g.lineTo(cw, y); g.stroke(); }
-  }
+  if (grid) { g.fillStyle = '#b4a68e'; const lw = Math.max(1.5, n * 0.012); g.fillRect(0, 0, lw, n); g.fillRect(0, 0, n, lw); }
   const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 }));
+  tex.userData.shared = true;
+  floorTex.set(key, tex);
+  return tex;
+}
+
+// Floor in the room's own shape; grid lines start at the room's corner and match the room's square size
+function floorMesh(room: Room, squareCm: number, grid: boolean, renderer: THREE.WebGLRenderer): THREE.Mesh {
+  const b = roomBox(room), tile = M(grid ? squareCm : 100);
+  const shape = new THREE.Shape(room.outline.map(p => new THREE.Vector2(M(p.x - b.x0), -M(p.z - b.z0))));
+  const geo = new THREE.ShapeGeometry(shape), pos = geo.attributes.position, uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) uv.setXY(i, pos.getX(i) / tile, 1 + pos.getY(i) / tile);
+  const floor = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: tileTexture(grid ? squareCm : 100, grid, renderer), roughness: 0.7 }));
   floor.rotation.x = -Math.PI / 2;
-  floor.position.set(M(b.x0) + w / 2, 0, M(b.z0) + d / 2);
+  floor.position.set(M(b.x0), 0, M(b.z0));
   floor.receiveShadow = true;
   return floor;
 }

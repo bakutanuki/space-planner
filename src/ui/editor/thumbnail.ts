@@ -17,11 +17,16 @@ export function makeThumbnail(place: Place, W = 320, H = 200): string {
   const ox = (W - (x1 - x0) * s) / 2, oy = (H - (z1 - z0) * s) / 2;
   // turned half a turn, like the editor's plan view
   const P = (x: number, z: number): [number, number] => [ox + (x1 - x) * s, oy + (z1 - z) * s];
-  for (const b of boxes) {
-    g.fillStyle = '#4a4640';
-    const [ax, ay] = P(b.x1 + t, b.z1 + t); g.fillRect(ax, ay, (b.x1 - b.x0 + 2 * t) * s, (b.z1 - b.z0 + 2 * t) * s);
+  for (const r of place.rooms) {
+    const pts = r.outline.map(p => P(p.x, p.z));
+    g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath();
+    g.strokeStyle = '#4a4640'; g.lineWidth = 2 * t * s; g.lineJoin = 'miter'; g.stroke();
   }
-  for (const b of boxes) { g.fillStyle = '#dccfb8'; const [ax, ay] = P(b.x1, b.z1); g.fillRect(ax, ay, (b.x1 - b.x0) * s, (b.z1 - b.z0) * s); }
+  for (const r of place.rooms) {
+    const pts = r.outline.map(p => P(p.x, p.z));
+    g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath();
+    g.fillStyle = '#dccfb8'; g.fill();
+  }
   for (const r of place.rooms) for (const bi of r.builtIns) poly(g, footprint(bi, bi.w, bi.d, bi.rot).map(p => P(p.x, p.z)), '#1c1916');
   const items = place.items.filter(i => !i.removed).sort((a, b) => effectiveElevation(place, a) - effectiveElevation(place, b));
   for (const it of items) poly(g, footprint(it, it.w, it.d, it.rot).map(p => P(p.x, p.z)), levelForHeight(effectiveElevation(place, it)).color);

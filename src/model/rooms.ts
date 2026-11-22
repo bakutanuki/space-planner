@@ -1,6 +1,7 @@
 import type { BuiltIn, Opening, Place, Pt, Room } from './types';
 import { newId } from './types';
 import { aabb, boxesOverlap, footprint, pointInPoly, type Box } from './geometry';
+import { boxInShape, partsOf } from './shape';
 
 export type Result<T> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -32,15 +33,39 @@ function rectOutline(b: Box): Pt[] {
   return [{ x: b.x0, z: b.z0 }, { x: b.x1, z: b.z0 }, { x: b.x1, z: b.z1 }, { x: b.x0, z: b.z1 }];
 }
 
-// Checks a room outline doesn't overlap other rooms (allowing for wall thickness)
-export function roomOverlap(place: Place, box: Box, ignoreId?: string): string | null {
-  const t = place.wallThickness;
+// Checks a room shape (given as rectangles) doesn't overlap other rooms (allowing for wall thickness)
+export function roomOverlap(place: Place, shape: Box | Box[], ignoreId?: string): string | null {
+  const t = place.wallThickness, mine = Array.isArray(shape) ? shape : [shape];
   for (const r of place.rooms) {
     if (r.id === ignoreId) continue;
-    const b = roomBox(r);
-    if (boxesOverlap(box, { x0: b.x0 - t, z0: b.z0 - t, x1: b.x1 + t, z1: b.z1 + t })) return r.name;
+    for (const b of partsOf(r.outline)) {
+      const big = { x0: b.x0 - t, z0: b.z0 - t, x1: b.x1 + t, z1: b.z1 + t };
+      if (mine.some(m => boxesOverlap(m, big))) return r.name;
+    }
   }
   return null;
+}
+
+// Moves doors and windows onto the matching walls of a new outline; ones on wall `moved` shift by (dx, dz). Null if one no longer sits on a wall
+export function remapOpenings(room: Room, outline: Pt[], moved?: { wall: number; dx: number; dz: number }): Opening[] | null {
+  const out: Opening[] = [];
+  const next = { ...room, outline };
+  for (const o of room.openings) {
+    const w = wallOf(room, o.wall);
+    const sh = moved && moved.wall === o.wall ? moved : { dx: 0, dz: 0 };
+    const pa = { x: w.a.x + w.dir.x * o.offset + sh.dx, z: w.a.z + w.dir.z * o.offset + sh.dz };
+    let found: Opening | null = null;
+    for (let j = 0; j < outline.length && !found; j++) {
+      const v = wallOf(next, j);
+      if (Math.abs(v.normalOut.x - w.normalOut.x) > 1e-6 || Math.abs(v.normalOut.z - w.normalOut.z) > 1e-6) continue;
+      if (Math.abs((pa.x - v.a.x) * v.normalOut.x + (pa.z - v.a.z) * v.normalOut.z) > 0.01) continue;
+      const t = Math.round(((pa.x - v.a.x) * v.dir.x + (pa.z - v.a.z) * v.dir.z) * 1e6) / 1e6;
+      if (t >= -1e-6 && t + o.width <= v.length + 1e-6) found = { ...o, wall: j, offset: Math.max(0, t) };
+    }
+    if (!found) return null;
+    out.push(found);
+  }
+  return out;
 }
 
 // Makes a new room on the outside of another room's wall, its corner offset cm along that wall
@@ -87,9 +112,7 @@ export function addOpening(room: Room, o: Omit<Opening, 'id'>): Result<{ opening
 export function checkBuiltIn(room: Room, b: Omit<BuiltIn, 'id'>): string | null {
   if (b.h > room.ceiling) return 'Taller than the ceiling';
   const fp = footprint({ x: b.x, z: b.z }, b.w, b.d, b.rot);
-  const rb = roomBox(room);
-  for (const p of fp) if (p.x < rb.x0 - 1e-6 || p.x > rb.x1 + 1e-6 || p.z < rb.z0 - 1e-6 || p.z > rb.z1 + 1e-6) return 'Must be inside the room';
-  return null;
+  return boxInShape(aabb(fp), room.outline) ? null : 'Must be inside the room';
 }
 
 // Adds a built-in box (like a closet) to a room (mutates the room passed in)
