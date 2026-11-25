@@ -1,6 +1,7 @@
 import type { BuiltIn, ItemType, Opening, Place, Pt, Room, Swing } from '../../model/types';
 import { squareOf, TYPE_DEFAULTS, TYPE_LABELS } from '../../model/types';
-import { roomBox, wallOf } from '../../model/rooms';
+import { doorLeaf, roomBox, wallOf } from '../../model/rooms';
+import { STYLE_DEFAULT, fitOpening, newOpening, styleOf, type OpeningStyle } from '../../model/doors';
 import { areaOf, wallIsLevel, wallName, wallStart } from '../../model/shape';
 import { addItem, addPieces, addRoom, addRoomPart, setItemColor, deleteBuiltIn, deleteOpening, deleteRoom, deleteItem, renameItem, resizeItem, saveBuiltIn, saveOpening, setItemHeight, updatePlace, updateRoom, type EditResult } from '../../model/edit';
 import { formatCm, formatBoth } from '../../model/units';
@@ -142,55 +143,113 @@ export function openRoomPartForm(place: Place, roomId: string, done: Done, hooks
   sync(); validate();
 }
 
-// + Door / Window, or edit an existing one
+// + Door / Window, or edit an existing one: a picture of the room you can tap, plain centimetres, flip buttons
 export function openOpeningForm(place: Place, roomId: string, done: Done, existing?: Opening, hooks: FormHooks = {}) {
-  let unit = defaultUnit(place);
   const room0 = place.rooms.find(r => r.id === roomId) ?? place.rooms[0];
   if (!room0) return;
-  const kind = selectField('Type', [['door', 'Door or doorway'], ['window', 'Window']], existing?.kind ?? 'door', () => { show(); validate(); });
-  const roomSel = selectField('Room', roomOptions(place), room0.id, () => { sync(); validate(); });
+  let style: OpeningStyle = existing ? styleOf(existing) : 'door';
+  let wi = existing?.wall ?? 0;
+  let swing: Swing = existing?.swing && existing.swing !== 'open' ? existing.swing : { into: 'room', hinge: 'start' };
+  const roomSel = selectField('Room', roomOptions(place), room0.id, () => { wi = 0; centre(); sync(); });
   const room = () => place.rooms.find(r => r.id === roomSel.sel.value)!;
-  const wall = selectField('Wall', wallOptions(room0), String(existing?.wall ?? 0), () => { sync(); validate(); });
-  const sq = () => squareOf(place, room());
-  const width = lengthField('Width', existing?.width ?? null, unit, sq(), () => validate());
-  const off = lengthField('Distance from the wall\'s end', existing?.offset ?? null, unit, sq(), () => validate(), { allowZero: true });
-  const offHint = h('div', { class: 'hint' });
-  const sill = lengthField('Sill height (floor to bottom of window)', existing?.kind === 'window' ? existing.sill : 100, 'cm', sq(), () => validate(), { allowZero: true });
-  const top = lengthField('Top height (floor to top of opening)', existing?.top ?? 205, 'cm', sq(), () => validate());
+  const len = () => wallOf(room(), wi).length;
+  const width = lengthField('Width', existing?.width ?? STYLE_DEFAULT[style], 'cm', 30, () => sync(), { plain: true });
+  const off = lengthField('Gap from the end', existing?.offset ?? Math.max(0, Math.round((len() - STYLE_DEFAULT[style]) / 2)), 'cm', 30, () => sync(), { allowZero: true, plain: true });
+  const sill = lengthField('Bottom of window, from the floor', existing?.kind === 'window' ? existing.sill : 90, 'cm', 30, () => sync(), { allowZero: true, plain: true });
+  const top = lengthField('Top of opening, from the floor', existing?.top ?? 205, 'cm', 30, () => sync(), { plain: true });
   const sillWrap = h('div', null, sill.el);
-  const sw0 = existing?.swing === 'open' ? 'open' : existing?.swing ? `${existing.swing.into}-${existing.swing.hinge}` : 'room-start';
-  const swing = selectField('Door', [], sw0, () => { hooks.highlightWall?.(room().id, Number(wall.sel.value)); validate(); });
-  const swingWrap = h('div', null, swing.el);
-  // labels in screen terms: which end of the wall the hinge is at
-  function swingOptions() {
-    const keep = swing.sel.value || sw0, wi = Number(wall.sel.value), st = wallStart(room().outline, wi).replace(' end', '');
-    const other = ({ left: 'right', right: 'left', top: 'bottom', bottom: 'top' } as Record<string, string>)[st] ?? 'other';
-    swing.sel.replaceChildren(...([['open', 'No door (open doorway)'], ['room-start', `Opens into ${room().name}, hinge on the ${st}`], ['room-end', `Opens into ${room().name}, hinge on the ${other}`],
-      ['out-start', `Opens outward, hinge on the ${st}`], ['out-end', `Opens outward, hinge on the ${other}`]] as [string, string][]).map(([v, t]) => h('option', { value: v }, t)));
-    swing.sel.value = keep;
+  const pic = h('div', { class: 'wallpic', style: { cursor: 'pointer', touchAction: 'manipulation' } });
+  const say = h('div', { class: 'hint', style: { fontSize: '14px' } });
+  const styles = h('div', { class: 'levels' });
+  const flips = h('div', { class: 'row' });
+  const ignore = () => (existing && roomSel.sel.value === roomId ? existing.id : undefined);
+  function centre() { const W = width.value() ?? STYLE_DEFAULT[style]; off.set(Math.max(0, Math.round((len() - W) / 2))); }
+  const current = (): Omit<Opening, 'id'> | null => {
+    const W = width.value(), O = off.value(), S = style === 'window' ? sill.value() : 0, T = top.value();
+    if (W == null || O == null || S == null || T == null) return null;
+    return { ...newOpening(style, room(), wi, O, W, swing), sill: S, top: T };
+  };
+  // the picture: the room as on the plan, the chosen wall in blue, the door with its swing and both gaps
+  function draw(o: Omit<Opening, 'id'> | null, bad: boolean) {
+    const r = room(), b = roomBox(r), T = place.wallThickness, pad = 30 + T;
+    const W = b.x1 - b.x0 + 2 * pad, H = b.z1 - b.z0 + 2 * pad, fs = Math.max(W, H) / 16;
+    const X = (p: Pt) => (-p.x).toFixed(1) + ',' + (-p.z).toFixed(1); // the plan is seen from the window side: screen left is +x, screen top is +z
+    const ln = (a: Pt, c: Pt, attrs: string) => `<line x1="${-a.x}" y1="${-a.z}" x2="${-c.x}" y2="${-c.z}" ${attrs}/>`;
+    const parts: string[] = [`<polygon points="${r.outline.map(X).join(' ')}" fill="#e9dfcd" stroke="#4a4640" stroke-width="${T}"/>`];
+    const w0 = wallOf(r, wi);
+    parts.push(ln(w0.a, w0.b, `stroke="#2f6fde" stroke-width="${T * 1.6}"`));
+    for (const x of r.openings) if (x.id !== ignore() && x.wall < r.outline.length) {
+      const w = wallOf(r, x.wall), p0 = { x: w.a.x + w.dir.x * x.offset, z: w.a.z + w.dir.z * x.offset }, p1 = { x: p0.x + w.dir.x * x.width, z: p0.z + w.dir.z * x.width };
+      parts.push(ln(p0, p1, `stroke="${x.kind === 'window' ? '#9cc7f0' : '#e9dfcd'}" stroke-width="${T * 1.2}"`));
+    }
+    if (o) {
+      const w = wallOf(r, o.wall), col = bad ? '#d93025' : '#1a8f4c';
+      const at = (t: number, sOut = 0) => ({ x: w.a.x + w.dir.x * t + w.normalOut.x * sOut, z: w.a.z + w.dir.z * t + w.normalOut.z * sOut });
+      parts.push(ln(at(o.offset), at(o.offset + o.width), `stroke="${col}" stroke-width="${T * 1.8}" opacity=".85"`));
+      const leaf = doorLeaf(r, { ...o, id: '' }, T);
+      if (leaf) {
+        const tip = { x: leaf.hinge.x + leaf.open.x * o.width, z: leaf.hinge.z + leaf.open.z * o.width };
+        const pts = Array.from({ length: 13 }, (_, k) => { const a = (k / 12) * Math.PI / 2; return X({ x: leaf.hinge.x + o.width * (Math.cos(a) * leaf.shut.x + Math.sin(a) * leaf.open.x), z: leaf.hinge.z + o.width * (Math.cos(a) * leaf.shut.z + Math.sin(a) * leaf.open.z) }); });
+        parts.push(ln(leaf.hinge, tip, `stroke="${col}" stroke-width="${fs / 4}"`),
+          `<polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="${fs / 6}" stroke-dasharray="${fs / 2} ${fs / 3}"/>`,
+          `<circle cx="${-leaf.hinge.x}" cy="${-leaf.hinge.z}" r="${fs / 3}" fill="${col}"/>`);
+      }
+      for (const [t0, t1] of [[0, o.offset], [o.offset + o.width, w.length]]) {
+        if (t1 - t0 < 1) continue;
+        const m = at((t0 + t1) / 2, -fs * 1.1);
+        parts.push(`<text x="${-m.x}" y="${-m.z}" font-size="${fs}" text-anchor="middle" dominant-baseline="middle" font-weight="700" fill="#1e1d1b" paint-order="stroke" stroke="#fff" stroke-width="${fs / 4}">${Math.round((t1 - t0) * 10) / 10} cm</text>`);
+      }
+    }
+    pic.innerHTML = `<svg viewBox="${-b.x1 - pad} ${-b.z1 - pad} ${W} ${H}" style="width:100%;max-height:240px;display:block" preserveAspectRatio="xMidYMid meet">${parts.join('')}</svg>`;
   }
-  const swingValue = (): Swing | 'open' | null => { const v = swing.sel.value; if (kind.sel.value !== 'door' || !v) return null; if (v === 'open') return 'open'; const [into, hinge] = v.split('-'); return { into: into as Swing['into'], hinge: hinge as Swing['hinge'] }; };
-  function show() { sillWrap.style.display = kind.sel.value === 'window' ? '' : 'none'; swingWrap.style.display = kind.sel.value === 'door' ? '' : 'none'; if (!existing) top.set(kind.sel.value === 'window' ? 210 : 205); }
+  // tapping the picture moves the opening to that spot on the nearest wall
+  pic.addEventListener('click', e => {
+    const svg = pic.querySelector('svg'), m = svg?.getScreenCTM();
+    if (!svg || !m) return;
+    const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse()), p = { x: -pt.x, z: -pt.y }, r = room();
+    let best = 0, bd = Infinity, bt = 0;
+    for (let i = 0; i < r.outline.length; i++) {
+      const w = wallOf(r, i), t = Math.max(0, Math.min(w.length, (p.x - w.a.x) * w.dir.x + (p.z - w.a.z) * w.dir.z));
+      const d = Math.hypot(p.x - (w.a.x + w.dir.x * t), p.z - (w.a.z + w.dir.z * t));
+      if (d < bd) { bd = d; best = i; bt = t; }
+    }
+    wi = best;
+    const W = width.value() ?? STYLE_DEFAULT[style], fit = fitOpening(place, r.id, wi, bt, W, { ignoreId: ignore(), snap: 10 });
+    off.set('offset' in fit ? fit.offset : Math.max(0, Math.min(len() - W, bt - W / 2)));
+    sync();
+  });
   function sync() {
-    width.setUnit(unit, sq()); off.setUnit(unit, sq());
-    if (wall.sel.options.length !== room().outline.length || wall.sel.dataset.room !== room().id) { setWallOptions(wall.sel, room()); wall.sel.dataset.room = room().id; }
-    const wi = Number(wall.sel.value);
-    offHint.textContent = `Measured from the wall's ${wallStart(room().outline, wi)}. This wall is ${formatBoth(wallOf(room(), wi).length, sq())}.`;
-    swingOptions();
-    hooks.highlightWall?.(room().id, wi);
+    const r = room(), st = wallStart(r.outline, wi);
+    const other = ({ 'left end': 'right end', 'right end': 'left end', 'top end': 'bottom end', 'bottom end': 'top end' } as Record<string, string>)[st] ?? 'other end';
+    off.el.querySelector('label')!.firstChild!.textContent = `Gap from the ${st} `;
+    styles.replaceChildren(...(['door', 'doorway', 'window'] as OpeningStyle[]).map(s => h('button', { type: 'button', 'aria-pressed': String(s === style), onclick: () => {
+      if (s === style) return; style = s; if (!existing) { width.set(STYLE_DEFAULT[s]); top.set(s === 'window' ? 210 : 205); } sync();
+    } }, STYLE_NAMES[s])));
+    flips.replaceChildren(...(style === 'door' ? [
+      h('button', { type: 'button', onclick: () => { swing = { ...swing, into: swing.into === 'room' ? 'out' : 'room' }; sync(); } }, '⇅ Flip in / out'),
+      h('button', { type: 'button', onclick: () => { swing = { ...swing, hinge: swing.hinge === 'start' ? 'end' : 'start' }; sync(); } }, '⇆ Flip hinge side'),
+    ] : []));
+    sillWrap.style.display = style === 'window' ? '' : 'none';
+    const o = current(), res = validate();
+    draw(o, !res);
+    say.textContent = o ? `${STYLE_NAMES[style]} on the ${wallName(r.outline, wi).toLowerCase()} (that wall is ${formatCm(len())} long): ${formatCm(o.offset)} from its ${st}, ${formatCm(Math.max(0, len() - o.offset - o.width))} from its ${other}.${style === 'door' ? ` Opens ${swing.into === 'room' ? 'into ' + r.name : 'outward'}.` : ''}` : '';
+    hooks.highlightWall?.(r.id, wi);
   }
   const f = footer(existing ? 'Save' : 'Add', () => { const r = validate(); if (r) { close(); done(r.place); } }, () => close());
   function validate() {
-    const W = width.value(), O = off.value(), S = kind.sel.value === 'window' ? sill.value() : 0, T = top.value();
-    return check(W != null && O != null && S != null && T != null, () => saveOpening(place, roomSel.sel.value, {
-      id: existing && roomSel.sel.value === roomId ? existing.id : undefined, kind: kind.sel.value as Opening['kind'], wall: Number(wall.sel.value), offset: O!, width: W!, sill: S!, top: T!, swing: swingValue(),
-    }), f);
+    const o = current();
+    return check(!!o, () => saveOpening(place, roomSel.sel.value, { ...o!, id: ignore() }), f);
   }
-  const body: Node[] = [unitSwitch(unit, u => { unit = u; sync(); }), h('div', { class: 'grid2' }, kind.el, roomSel.el), wall.el, h('div', { class: 'grid2' }, width.el, off.el), offHint, h('div', { class: 'grid2' }, sillWrap, top.el), swingWrap, f.el];
+  const body: Node[] = [
+    h('div', { class: 'hint', style: { fontSize: '14px' } }, 'Tap a wall in the picture to put it there. Fine-tune with the numbers below.'),
+    pic, say, styles, flips,
+    h('div', { class: 'grid2' }, width.el, off.el), h('div', { class: 'grid2' }, sillWrap, top.el),
+    ...(place.rooms.length > 1 ? [roomSel.el] : []), f.el];
   if (existing) body.push(h('button', { type: 'button', class: 'warn', onclick: async () => { if (await confirmDialog('Delete this ' + existing.kind + '?', 'Delete')) { close(); done(deleteOpening(place, roomId, existing.id).place); } } }, 'Delete ' + existing.kind));
-  const close = sheet(existing ? 'Edit ' + existing.kind : '+ Door or window', body, { onClose: () => hooks.highlightWall?.(null, 0) });
-  show(); sync(); validate();
+  const close = sheet(existing ? 'Edit ' + STYLE_NAMES[style].toLowerCase() : '+ Door or window', body, { onClose: () => hooks.highlightWall?.(null, 0) });
+  sync();
 }
+const STYLE_NAMES: Record<OpeningStyle, string> = { door: 'Door', doorway: 'Open doorway', window: 'Window' };
 
 // + Built-in (closet etc.): a fixed box standing against a wall
 export function openBuiltInForm(place: Place, roomId: string, done: Done, existing?: BuiltIn, hooks: FormHooks = {}) {

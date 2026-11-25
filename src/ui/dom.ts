@@ -68,7 +68,7 @@ export type Unit = 'cm' | 'sq';
 export interface LengthField { el: HTMLElement; value: () => number | null; ok: () => boolean; set: (cm: number) => void; setUnit: (u: Unit, sq: number) => void; refresh: () => void }
 
 // A length box that accepts cm or squares, shows errors under it, and the other unit live
-export function lengthField(label: string, initialCm: number | null, unit: Unit, squareCm: number, onInput: () => void, opts: { allowZero?: boolean; placeholder?: string; optional?: boolean } = {}): LengthField {
+export function lengthField(label: string, initialCm: number | null, unit: Unit, squareCm: number, onInput: () => void, opts: { allowZero?: boolean; placeholder?: string; optional?: boolean; plain?: boolean } = {}): LengthField {
   let u = unit, sq = squareCm, cm: number | null = initialCm;
   const fmt = (v: number) => (u === 'cm' ? String(Math.round(v * 100) / 100) : sqText(v / sq));
   const input = h('input', { inputmode: 'decimal', autocomplete: 'off', value: initialCm == null ? '' : fmt(initialCm), placeholder: opts.placeholder ?? '' });
@@ -83,7 +83,7 @@ export function lengthField(label: string, initialCm: number | null, unit: Unit,
     cm = r.ok ? r.cm : null;
     err.textContent = r.ok || !input.value.trim() && initialCm == null && !touched ? '' : (r as { error: string }).error;
     input.setAttribute('aria-invalid', String(!r.ok && touched));
-    hint.textContent = r.ok ? (u === 'cm' ? formatBoth(r.cm, sq) : formatCm(r.cm) + ' · ' + formatBoth(r.cm, sq).split(' · ')[1]) : '';
+    hint.textContent = r.ok && !opts.plain ? (u === 'cm' ? formatBoth(r.cm, sq) : formatCm(r.cm) + ' · ' + formatBoth(r.cm, sq).split(' · ')[1]) : '';
   };
   let touched = initialCm != null;
   input.addEventListener('input', () => { touched = true; parse(); onInput(); });
