@@ -9,7 +9,10 @@ import { LEVELS, levelForHeight } from '../../model/levels';
 import { formatCm } from '../../model/units';
 import { allowOverlap, cloneItem, cloneRoom, groupItems, groupOf, moveGroup, rotateGroup, setItemColor, ungroup, moveItem, moveRoom, moveRoomWall, removeItem, restoreItem, rotateItem, setItemLevel, snapRoomMove, snapWallMove } from '../../model/edit';
 import type { Box } from '../../model/geometry';
-import { h, sheet, toast } from '../dom';
+import { h, promptDialog, sheet, toast } from '../dom';
+import { wallName, wallStart } from '../../model/shape';
+import { STYLE_DEFAULT, STYLE_WIDTHS, defaultSwing, findOpening, fitOpening, flipHinge, flipSide, nearestWall, newOpening, placeOpening, removeOpening, resizeOpening, setStyle, styleOf, updateOpening, type OpeningStyle } from '../../model/doors';
+import type { Opening } from '../../model/types';
 import { SceneView } from './scene';
 import { openBuiltInForm, openFurnitureForm, openItemEditor, openOpeningForm, openRoomEditor, openRoomForm, openRoomPartForm, openRoomsSheet, openSettings, sizeText } from './forms';
 
@@ -25,6 +28,10 @@ export interface EditorApi { destroy(): void; setStatus(text: string, cls: strin
 export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Place) => void, onBack: () => void): EditorApi {
   let place = initial, selected: string | null = null, scope: string = initial.rooms[0]?.id ?? 'all', tint = false;
   let wallMark: { roomId: string; wall: number } | null = null, preview: Pt[] | null = null, selRoom: string | null = null;
+  // Doors and windows: placing mode (hover a wall to see where it goes, tap to put it there), its preview, the picked one
+  let placing: { style: OpeningStyle; width: number } | null = null, selDoor: string | null = null;
+  let ghost: { roomId: string; o: Omit<Opening, 'id'>; error?: string } | null = null;
+  const lastWidth: Record<OpeningStyle, number> = { ...STYLE_DEFAULT };
 
   const status = h('button', { type: 'button', class: 'ghost status', 'aria-live': 'polite' });
   const viewBtn = h('button', { type: 'button', 'aria-label': 'Show 3D view', onclick: () => setMode(scene.mode === '2d' ? '3d' : '2d') }, '3D');
@@ -57,6 +64,7 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
     to.push(committed); committed = p; place = p; title.textContent = p.name;
     if (selected && !p.items.some(i => i.id === selected && !i.removed)) selected = null;
     if (selRoom && !p.rooms.some(r => r.id === selRoom)) selRoom = null;
+    if (selDoor && !findOpening(p, selDoor)) selDoor = null;
     onChange(p); refresh();
   }
   const undo = () => history(undoStack, redoStack), redo = () => history(redoStack, undoStack);
@@ -97,7 +105,10 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
   function renderPanel(overlaps = findOverlaps(place)) {
     const it = sel();
     actions.replaceChildren(); levels.replaceChildren(); info.replaceChildren();
-    if (it) {
+    const door = selDoor ? findOpening(place, selDoor) : null;
+    if (placing) placingPanel(placing);
+    else if (door) doorPanel(door.room, door.o);
+    else if (it) {
       const elev = effectiveElevation(place, it), lvl = levelForHeight(elev);
       const parent = it.sitsOn ? place.items.find(i => i.id === it.sitsOn) : null;
       const bumps = (overlaps.get(it.id) ?? []).map(id => place.items.find(i => i.id === id)?.name).filter(Boolean);
@@ -123,6 +134,7 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
         scene.mode === '2d' ? 'Drag inside the room to move it. Drag a round handle to move that wall.' : 'Switch to 2D to move the room or drag its walls.');
       actions.append(
         h('button', { type: 'button', onclick: () => openRoomEditor(place, r.id, p => { commit(p); if (!p.rooms.some(x => x.id === r.id)) selectRoom(null); }, hooks) }, 'Edit details'),
+        h('button', { type: 'button', onclick: () => startPlacing('door') }, '+ Door or window'),
         h('button', { type: 'button', onclick: () => openRoomPartForm(place, r.id, p => commit(p), hooks) }, '+ Add a part (L shape)'),
         h('button', { type: 'button', onclick: () => {
           const c = cloneRoom(place, r.id);
@@ -135,10 +147,11 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
       info.append('This place has no rooms yet. Add the first one by its width and depth.');
       actions.append(h('button', { type: 'button', class: 'primary', onclick: () => openRoomForm(place, p => { commit(p); scope = p.rooms[0].id; scene.frame(scopeBox()); }, hooks) }, '+ Room'));
     } else {
-      info.append(`Tap a piece to pick it, then drag it. Tap a room's floor to move it, reshape it or copy it. ${scene.mode === '2d' ? 'Drag empty space to move around' : 'Drag empty space to look around'}, pinch to zoom.`);
+      info.append(`Tap a piece to pick it, then drag it. Tap a door to flip or move it. Tap a room's floor to move it, reshape it or copy it. ${scene.mode === '2d' ? 'Drag empty space to move around' : 'Drag empty space to look around'}, pinch to zoom.`);
       actions.append(
         h('button', { type: 'button', class: 'primary', onclick: () => openFurnitureForm(place, scopeRoomId(), (p, id) => { commit(p); select(id); }) }, '+ Furniture'),
-        h('button', { type: 'button', onclick: () => addMenu() }, '+ Room, door…'),
+        h('button', { type: 'button', onclick: () => startPlacing('door') }, '+ Door or window'),
+        h('button', { type: 'button', onclick: () => addMenu() }, '+ Room, built-in…'),
         h('button', { type: 'button', 'aria-pressed': String(tint), onclick: () => { tint = !tint; refresh(); } }, 'Height levels'));
     }
     const gone = place.items.filter(i => i.removed);
@@ -185,14 +198,110 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
       h('div', { class: 'row' }, custom, h('span', { class: 'muted' }, 'Any other colour'), h('button', { type: 'button', onclick: () => set(null) }, 'Original look')),
       ...(g.length > 1 ? [h('label', { class: 'row' }, all, 'Colour the whole group')] : [])]);
   }
-  function select(id: string | null) { selected = id; if (id) selRoom = null; refresh(); }
-  function selectRoom(id: string | null) { selRoom = id; if (id) selected = null; refresh(); }
+  function select(id: string | null) { selected = id; if (id) { selRoom = null; selDoor = null; placing = null; ghost = null; } refresh(); }
+  function selectRoom(id: string | null) { selRoom = id; if (id) { selected = null; selDoor = null; placing = null; ghost = null; } refresh(); }
+  function selectDoor(id: string | null) { selDoor = id; if (id) { selected = null; selRoom = null; placing = null; ghost = null; } refresh(); }
+
+  // Placing mode: pick door / doorway / window and a width, then tap a wall
+  function startPlacing(style: OpeningStyle) {
+    if (!place.rooms.length) { toast('Add a room first', stage); return; }
+    selected = null; selRoom = null; selDoor = null; ghost = null;
+    placing = { style, width: lastWidth[style] };
+    refresh();
+  }
+  const STYLE_NAMES: Record<OpeningStyle, string> = { door: 'Door', doorway: 'Open doorway', window: 'Window' };
+  async function askWidth(cur: number): Promise<number | null> {
+    const v = await promptDialog('Width', 'Width in cm (inside of the frame)', String(cur), 'OK');
+    const n = v == null ? NaN : parseFloat(v.replace(',', '.'));
+    if (v != null && !(n > 0)) toast('Type a width in cm, like 85', stage);
+    return n > 0 ? n : null;
+  }
+  function widthChips(style: OpeningStyle, cur: number, set: (w: number) => void): HTMLElement {
+    const list = STYLE_WIDTHS[style].includes(cur) ? STYLE_WIDTHS[style] : [...STYLE_WIDTHS[style], cur].sort((a, b) => a - b);
+    return h('div', { class: 'levels', role: 'group', 'aria-label': 'Width' }, h('span', { class: 'muted' }, 'Width'),
+      ...list.map(wd => h('button', { type: 'button', 'aria-pressed': String(Math.abs(wd - cur) < 0.01), onclick: () => set(wd) }, formatCm(wd))),
+      h('button', { type: 'button', onclick: async () => { const n = await askWidth(cur); if (n) set(n); } }, 'Other…'));
+  }
+  function styleChips(cur: OpeningStyle, set: (s: OpeningStyle) => void): HTMLElement {
+    return h('div', { class: 'levels', role: 'group', 'aria-label': 'Kind' },
+      ...(['door', 'doorway', 'window'] as OpeningStyle[]).map(s => h('button', { type: 'button', 'aria-pressed': String(s === cur), onclick: () => set(s) }, STYLE_NAMES[s])));
+  }
+  function placingPanel(pl: { style: OpeningStyle; width: number }) {
+    const what = STYLE_NAMES[pl.style].toLowerCase();
+    info.append(h('b', null, `Add ${pl.style === 'window' ? 'a window' : pl.style === 'door' ? 'a door' : 'an open doorway'}`), h('br'),
+      `Tap a wall where the ${what} goes (with a mouse, just point first to see it). You can drag it and flip it afterwards.`);
+    levels.append(styleChips(pl.style, s => { placing = { style: s, width: lastWidth[s] }; ghost = null; refresh(); }),
+      widthChips(pl.style, pl.width, wd => { lastWidth[pl.style] = wd; placing = { ...pl, width: wd }; ghost = null; refresh(); }));
+    actions.append(
+      h('button', { type: 'button', onclick: () => { const rid = scopeRoomId(); placing = null; ghost = null; refresh(); openOpeningForm(place, rid, p => commit(p), undefined, hooks); } }, 'Type exact numbers instead'),
+      h('button', { type: 'button', class: 'primary', onclick: () => { placing = null; ghost = null; refresh(); } }, 'Cancel'));
+  }
+  function doorPanel(room: typeof place.rooms[number], o: Opening) {
+    const style = styleOf(o), w = wallOf(room, o.wall);
+    const st = wallStart(room.outline, o.wall), other = ({ 'left end': 'right end', 'right end': 'left end', 'top end': 'bottom end', 'bottom end': 'top end' } as Record<string, string>)[st] ?? 'other end';
+    const sw = style === 'door' ? (o.swing && o.swing !== 'open' ? o.swing : { into: 'room', hinge: 'start' }) : null;
+    info.append(h('b', null, STYLE_NAMES[style]), ' ', h('span', { class: 'num' }, `${formatCm(o.width)} wide`), ` on ${room.name}'s ${wallName(room.outline, o.wall).toLowerCase()}.`, h('br'),
+      h('span', { class: 'num' }, `${formatCm(o.offset)} from the ${st}, ${formatCm(w.length - o.offset - o.width)} from the ${other}.`), ' ',
+      sw ? `Opens ${sw.into === 'room' ? 'into ' + room.name : 'outward'}. ` : '', 'Drag it along the wall, or onto another wall, to move it.');
+    const up = (r: { place: Place; error?: string }) => apply(r);
+    levels.append(styleChips(style, s => { lastWidth[s] = o.width; up(setStyle(place, o.id, s)); }),
+      widthChips(style, o.width, wd => { lastWidth[style] = wd; up(resizeOpening(place, o.id, wd)); }));
+    actions.append(
+      ...(sw ? [h('button', { type: 'button', onclick: () => up(flipSide(place, o.id)) }, '⇅ Flip in / out'),
+        h('button', { type: 'button', onclick: () => up(flipHinge(place, o.id)) }, '⇆ Flip hinge side')] : []),
+      h('button', { type: 'button', onclick: () => openOpeningForm(place, room.id, p => { commit(p); if (!findOpening(p, o.id)) selectDoor(null); }, o, hooks) }, 'Exact numbers…'),
+      h('button', { type: 'button', class: 'warn', onclick: () => { selDoor = null; commit(removeOpening(place, o.id).place); toast(`${STYLE_NAMES[style]} removed. Undo (↶) brings it back.`, stage); } }, 'Delete'),
+      h('button', { type: 'button', class: 'primary', onclick: () => selectDoor(null) }, 'Done'));
+  }
+
+  // Where the opening being placed would go for a pointer spot (null when not near a wall)
+  function ghostAt(cx: number, cy: number) {
+    const pl = placing!, fp = scene.floorPoint(cx, cy), px = cmPerPx(cx, cy);
+    const hit = fp ? nearestWall(place, fp, Math.max(25, 28 * px)) : null;
+    if (!hit) { ghost = null; scene.requestRender(); return; }
+    const room = place.rooms.find(r => r.id === hit.roomId)!;
+    const fit = fitOpening(place, hit.roomId, hit.wall, hit.t, pl.width, { snap: 10 * px });
+    const offset = 'offset' in fit ? fit.offset : Math.max(0, Math.min(wallOf(room, hit.wall).length - pl.width, hit.t - pl.width / 2));
+    ghost = { roomId: hit.roomId, o: newOpening(pl.style, room, hit.wall, offset, Math.min(pl.width, wallOf(room, hit.wall).length), defaultSwing(place, hit.roomId, hit.wall, offset, pl.width)), error: 'error' in fit ? fit.error : undefined };
+    scene.requestRender();
+  }
+  function placeGhost() {
+    if (!ghost) { toast('Tap on a wall', stage); return; }
+    if (ghost.error) { toast(ghost.error, stage); return; }
+    const r = placeOpening(place, ghost.roomId, ghost.o);
+    if (r.error || !r.id) { toast(r.error ?? 'Could not add it', stage); return; }
+    placing = null; ghost = null; selDoor = r.id; selected = null; selRoom = null;
+    commit(r.place);
+  }
+
+  // The door or window under a pointer spot: on its wall (close), or inside its swing (loose)
+  function doorAt(cx: number, cy: number, loose: boolean): string | null {
+    const sr = stage.getBoundingClientRect(), x = cx - sr.left, y = cy - sr.top, T = place.wallThickness;
+    let best: string | null = null, bestD = 16;
+    for (const r of place.rooms) for (const o of r.openings) {
+      if (o.wall >= r.outline.length) continue;
+      const w = wallOf(r, o.wall), at = (t: number) => scene.project({ x: w.a.x + w.dir.x * t + w.normalOut.x * T / 2, z: w.a.z + w.dir.z * t + w.normalOut.z * T / 2 });
+      const a = at(o.offset), b = at(o.offset + o.width), d = segDistPx(x, y, a, b);
+      if (d < bestD) { bestD = d; best = o.id; }
+    }
+    if (best || !loose || scene.mode !== '2d') return best;
+    const fp = scene.floorPoint(cx, cy);
+    if (!fp) return null;
+    for (const r of place.rooms) for (const o of r.openings) {
+      const leaf = doorLeaf(r, o, T);
+      if (!leaf) continue;
+      const dx = fp.x - leaf.hinge.x, dz = fp.z - leaf.hinge.z;
+      const u = dx * leaf.shut.x + dz * leaf.shut.z, v = dx * leaf.open.x + dz * leaf.open.z;
+      if (u >= 0 && v >= 0 && Math.hypot(u, v) <= o.width) return o.id;
+    }
+    return null;
+  }
 
   function addMenu() {
     const rid = scopeRoomId();
     const close = sheet('Add', [h('div', { class: 'list' },
       h('button', { type: 'button', onclick: () => { close(); openRoomForm(place, (p, id) => { commit(p); if (id) { selectRoom(id); scope = 'all'; renderScopes(); scene.frame(scopeBox()); } }, hooks); } }, '+ Room'),
-      h('button', { type: 'button', onclick: () => { close(); openOpeningForm(place, rid, p => commit(p), undefined, hooks); } }, '+ Door or window'),
+      h('button', { type: 'button', onclick: () => { close(); startPlacing('door'); } }, '+ Door or window'),
       h('button', { type: 'button', onclick: () => { close(); openBuiltInForm(place, rid, p => commit(p), undefined, hooks); } }, '+ Built-in (closet, counter…)'),
       h('button', { type: 'button', onclick: () => { close(); openFurnitureForm(place, rid, (p, id) => { commit(p); select(id); }); } }, '+ Furniture'))]);
   }
@@ -252,6 +361,9 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
       g.strokeStyle = BLUE; g.lineWidth = 2; g.setLineDash([6, 4]); g.stroke(); g.setLineDash([]);
     }
     if (scene.mode === '2d') drawSwings(g);
+    const sd = selDoor ? findOpening(place, selDoor) : null;
+    if (sd) drawOpening(g, sd.room, sd.o, BLUE);
+    if (ghost) { const gr = place.rooms.find(x => x.id === ghost!.roomId); if (gr) drawOpening(g, gr, ghost.o, ghost.error ? '#d93025' : '#1a8f4c', true); }
     const room = curRoom();
     if (room) {
       path(g, room.outline); g.fillStyle = 'rgba(47,111,222,.10)'; g.fill();
@@ -286,6 +398,44 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
     }
   }
 
+  // A door or window being placed or picked: the gap in the wall, its swing, and how far it is from each end of the wall
+  function drawOpening(g: CanvasRenderingContext2D, room: typeof place.rooms[number], o: Omit<Opening, 'id'>, color: string, faintWall = false) {
+    if (o.wall >= room.outline.length) return;
+    const T = place.wallThickness, w = wallOf(room, o.wall), n = w.normalOut;
+    const on = (t: number, s: number) => ({ x: w.a.x + w.dir.x * t + n.x * s, z: w.a.z + w.dir.z * t + n.z * s });
+    if (faintWall) {
+      const a = scene.project(on(0, T / 2)), b = scene.project(on(w.length, T / 2));
+      g.strokeStyle = color; g.globalAlpha = 0.25; g.lineWidth = 8; g.lineCap = 'round'; g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke(); g.globalAlpha = 1;
+    }
+    path(g, [on(o.offset, -2), on(o.offset + o.width, -2), on(o.offset + o.width, T + 2), on(o.offset, T + 2)]);
+    g.fillStyle = color; g.globalAlpha = 0.45; g.fill(); g.globalAlpha = 1; g.strokeStyle = color; g.lineWidth = 2.5; g.stroke();
+    const leaf = doorLeaf(room, { ...o, id: '' }, T);
+    if (leaf) {
+      const at = (ang: number) => scene.project({ x: leaf.hinge.x + o.width * (Math.cos(ang) * leaf.shut.x + Math.sin(ang) * leaf.open.x), z: leaf.hinge.z + o.width * (Math.cos(ang) * leaf.shut.z + Math.sin(ang) * leaf.open.z) });
+      const hp = scene.project(leaf.hinge), tip = at(Math.PI / 2);
+      g.strokeStyle = color; g.lineWidth = 3; g.beginPath(); g.moveTo(hp.x, hp.y); g.lineTo(tip.x, tip.y); g.stroke();
+      g.lineWidth = 2; g.setLineDash([5, 4]); g.beginPath();
+      for (let k = 0; k <= 24; k++) { const q = at((k / 24) * Math.PI / 2); if (k) g.lineTo(q.x, q.y); else g.moveTo(q.x, q.y); }
+      g.stroke(); g.setLineDash([]);
+      g.fillStyle = color; g.beginPath(); g.arc(hp.x, hp.y, 4, 0, Math.PI * 2); g.fill();
+    }
+    // gaps to the wall ends, written just inside the room
+    const inset = -Math.max(14, 18 * cmPerPxAtScreen());
+    const gaps: [number, number][] = [[0, o.offset], [o.offset + o.width, w.length]];
+    for (const [t0, t1] of gaps) {
+      if (t1 - t0 < 0.5) continue;
+      const a = scene.project(on(t0, inset * 0.5)), b = scene.project(on(t1, inset * 0.5));
+      if (Math.hypot(b.x - a.x, b.y - a.y) < 24) continue;
+      g.strokeStyle = color; g.lineWidth = 1.5; g.setLineDash([4, 3]); g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke(); g.setLineDash([]);
+      const m = scene.project(on((t0 + t1) / 2, inset * 1.4));
+      label(g, formatCm(t1 - t0), m.x, m.y);
+    }
+  }
+  function cmPerPxAtScreen(): number {
+    const a = scene.project({ x: 0, z: 0 }), b = scene.project({ x: 100, z: 0 });
+    return 100 / (Math.hypot(b.x - a.x, b.y - a.y) || 1);
+  }
+
   // Door swing arcs: the leaf fully open plus the quarter circle its edge travels
   function drawSwings(g: CanvasRenderingContext2D) {
     const T = place.wallThickness;
@@ -315,11 +465,19 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
   const active = new Set<number>();
   let drag: { id: string; ox: number; oz: number; pid: number; moved: boolean; last: Pt | null; err: string; group: string[]; base: Place; gd: Pt } | null = null;
   let shape: { kind: 'wall' | 'room'; roomId: string; wall: number; start: Pt; base: Place; pid: number; moved: boolean; err: string } | null = null;
-  let down: { x: number; y: number; pid: number; moved: boolean; hit: boolean } | null = null;
+  let down: { x: number; y: number; pid: number; moved: boolean; hit: boolean; place?: boolean } | null = null;
+  let doorDrag: { id: string; pid: number; base: Place; grab: number; wall: string; moved: boolean; err: string } | null = null;
   const onDown = (e: PointerEvent) => {
     active.add(e.pointerId);
-    if (active.size > 1) { if (drag) endDrag(); if (shape) endShape(); scene.controls.enabled = true; down = null; return; }
+    if (active.size > 1) { if (drag) endDrag(); if (shape) endShape(); doorDrag = null; scene.controls.enabled = true; down = null; return; }
     const sr = stage.getBoundingClientRect(), lx = e.clientX - sr.left, ly = e.clientY - sr.top;
+    if (placing) {
+      // near a wall: press shows where it goes, release puts it there; elsewhere the view pans as usual
+      ghostAt(e.clientX, e.clientY);
+      down = { x: e.clientX, y: e.clientY, pid: e.pointerId, moved: false, hit: !!ghost, place: !!ghost };
+      if (ghost) scene.controls.enabled = false;
+      return;
+    }
     const hd = handles().find(q => Math.hypot(q.x - lx, q.y - ly) < 22);
     const fp = scene.floorPoint(e.clientX, e.clientY);
     if (hd && fp) {
@@ -327,7 +485,11 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
       down = { x: e.clientX, y: e.clientY, pid: e.pointerId, moved: false, hit: true };
       scene.controls.enabled = false; return;
     }
+    const dh = doorAt(e.clientX, e.clientY, false);
+    if (dh) { startDoorDrag(dh, e); return; }
     const hit = scene.pick(e.clientX, e.clientY);
+    const loose = hit ? null : doorAt(e.clientX, e.clientY, true);
+    if (loose) { startDoorDrag(loose, e); return; }
     down = { x: e.clientX, y: e.clientY, pid: e.pointerId, moved: false, hit: !!hit };
     if (hit) {
       if (selected !== hit) select(hit);
@@ -341,8 +503,35 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
       down.hit = true; scene.controls.enabled = false;
     }
   };
+  function startDoorDrag(id: string, e: PointerEvent) {
+    if (selDoor !== id) selectDoor(id);
+    const f = findOpening(place, id)!, w = wallOf(f.room, f.o.wall), fp = scene.floorPoint(e.clientX, e.clientY);
+    const t = fp ? (fp.x - w.a.x) * w.dir.x + (fp.z - w.a.z) * w.dir.z : f.o.offset + f.o.width / 2;
+    doorDrag = { id, pid: e.pointerId, base: place, grab: t - (f.o.offset + f.o.width / 2), wall: f.room.id + ':' + f.o.wall, moved: false, err: '' };
+    down = { x: e.clientX, y: e.clientY, pid: e.pointerId, moved: false, hit: true };
+    scene.controls.enabled = false;
+  }
+  // Drag a door along its wall, or across to another wall
+  function moveDoor(e: PointerEvent) {
+    const dd = doorDrag!, fp = scene.floorPoint(e.clientX, e.clientY), px = cmPerPx(e.clientX, e.clientY);
+    const f = findOpening(dd.base, dd.id);
+    if (!fp || !f) return;
+    const hit = nearestWall(dd.base, fp, Math.max(40, 40 * px));
+    if (!hit) return;
+    const sameWall = hit.roomId + ':' + hit.wall === dd.wall;
+    const fit = fitOpening(dd.base, hit.roomId, hit.wall, hit.t - (sameWall ? dd.grab : 0), f.o.width, { ignoreId: dd.id, snap: 10 * px });
+    dd.moved = true;
+    if ('error' in fit) { if (fit.error !== dd.err) toast(fit.error, stage); dd.err = fit.error; return; }
+    const ch: Partial<Opening> & { roomId?: string } = { roomId: hit.roomId, wall: hit.wall, offset: fit.offset };
+    // a door moved to another room's wall keeps opening into the room it was dragged to
+    const r = updateOpening(dd.base, dd.id, ch);
+    if (r.error) { if (r.error !== dd.err) toast(r.error, stage); dd.err = r.error; return; }
+    dd.err = ''; place = r.place; refresh();
+  }
   const onMove = (e: PointerEvent) => {
     if (down && e.pointerId === down.pid && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) down.moved = true;
+    if (placing && (!down || (down.pid === e.pointerId && down.place))) { if (down || (e.pointerType === 'mouse' && stage.contains(e.target as Node))) ghostAt(e.clientX, e.clientY); else if (ghost && !down) { ghost = null; scene.requestRender(); } return; }
+    if (doorDrag && e.pointerId === doorDrag.pid) { if (down?.moved) moveDoor(e); return; }
     if (shape && e.pointerId === shape.pid && down?.moved) { moveShape(e); return; }
     if (!drag || e.pointerId !== drag.pid || !down?.moved) return;
     const p = scene.floorPoint(e.clientX, e.clientY), it = sel();
@@ -389,6 +578,15 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
   };
   const onUp = (e: PointerEvent) => {
     active.delete(e.pointerId);
+    if (placing && down && e.pointerId === down.pid) {
+      if (down.place) { ghostAt(e.clientX, e.clientY); placeGhost(); }
+      else if (!down.moved) toast('Tap on a wall', stage);
+      down = null; if (!active.size) scene.controls.enabled = true; return;
+    }
+    if (doorDrag && e.pointerId === doorDrag.pid) {
+      if (doorDrag.moved && place !== doorDrag.base) commit(place);
+      doorDrag = null; down = null; if (!active.size) scene.controls.enabled = true; return;
+    }
     if (drag && e.pointerId === drag.pid) endDrag();
     if (shape && e.pointerId === shape.pid) endShape();
     if (down && e.pointerId === down.pid) {
@@ -396,6 +594,7 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
         // a tap on empty floor: first clears a picked piece, otherwise picks the room under it
         const fp = scene.floorPoint(e.clientX, e.clientY), room = fp ? roomAt(place, fp) : undefined;
         if (selected) select(null);
+        else if (selDoor) selectDoor(null);
         else if (room && room.id !== selRoom) selectRoom(room.id);
         else if (selRoom) selectRoom(null);
       }
@@ -404,7 +603,12 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
     if (!active.size) scene.controls.enabled = true;
   };
   const onKey = (e: KeyboardEvent) => {
-    if (!(e.ctrlKey || e.metaKey) || (e.target as HTMLElement)?.closest?.('input,textarea,select')) return;
+    const inField = !!(e.target as HTMLElement)?.closest?.('input,textarea,select');
+    if (!inField && !document.querySelector('.backdrop')) {
+      if (e.key === 'Escape' && (placing || selDoor)) { placing = null; ghost = null; selDoor = null; refresh(); return; }
+      if (e.key === 'Delete' && selDoor) { const id = selDoor; selDoor = null; commit(removeOpening(place, id).place); return; }
+    }
+    if (!(e.ctrlKey || e.metaKey) || inField) return;
     const k = e.key.toLowerCase();
     if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); } else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
   };
@@ -421,8 +625,15 @@ export function mountEditor(root: HTMLElement, initial: Place, onChange: (p: Pla
   return {
     destroy() { window.removeEventListener('keydown', onKey); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', onUp); scene.dispose(); },
     setStatus(text, cls, onClick) { status.textContent = text; status.className = 'ghost status ' + cls; status.onclick = onClick ?? null; },
-    replacePlace(p) { place = p; committed = p; undoStack.length = 0; redoStack.length = 0; title.textContent = p.name; if (selected && !p.items.some(i => i.id === selected)) selected = null; if (selRoom && !p.rooms.some(r => r.id === selRoom)) selRoom = null; refresh(); },
+    replacePlace(p) { place = p; committed = p; undoStack.length = 0; redoStack.length = 0; title.textContent = p.name; if (selected && !p.items.some(i => i.id === selected)) selected = null; if (selRoom && !p.rooms.some(r => r.id === selRoom)) selRoom = null; if (selDoor && !findOpening(p, selDoor)) selDoor = null; refresh(); },
     current: () => place,
   };
 }
 export type { Item };
+
+// Distance in screen pixels from a point to a line segment
+function segDistPx(x: number, y: number, a: { x: number; y: number }, b: { x: number; y: number }): number {
+  const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+  const t = l2 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / l2)) : 0;
+  return Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy));
+}
